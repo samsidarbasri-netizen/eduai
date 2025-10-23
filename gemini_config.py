@@ -6,67 +6,61 @@ import uuid
 from datetime import datetime
 import logging
 from typing import Optional, Dict, Any, List
-import re # Diperlukan untuk ekstraksi JSON yang lebih robust
+import re 
 
 # --- Konfigurasi dan Logger ---
-# Inisialisasi logger untuk debugging
+# Mengatur logger untuk debugging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Variabel global untuk instance
-_model = None
-_db = None
-
 # --- Inisialisasi Gemini API dan Database (Firestore Mock) ---
 
-# Fungsi yang di-cache untuk inisialisasi satu kali
 @st.cache_resource(show_spinner=False)
-def init_gemini():
-    """Menginisialisasi Model Gemini dan Mock Database."""
-    global _model, _db
+def init_gemini() -> bool:
+    """Menginisialisasi Konfigurasi Gemini dan Mock Database. Mengembalikan status bool."""
     
-    # Dapatkan API Key dari secrets Streamlit
-    # Gunakan variabel kosong jika tidak ada secret (asumsi environment akan menyediakannya)
+    # Mencoba mendapatkan API Key dari Streamlit Secrets
+    # Asumsikan 'GEMINI_API_KEY' ada di file .streamlit/secrets.toml
     API_KEY = st.secrets.get("GEMINI_API_KEY", "") 
     
-    # Jika API_KEY kosong, setelannya akan ditangani oleh genai.Client
+    if not API_KEY:
+        # Jika kunci tidak ditemukan, tampilkan error dan kembalikan False
+        st.sidebar.error("❌ GEMINI_API_KEY tidak ditemukan di Secrets.")
+        return False
+    
     try:
-        # Inisialisasi Model Gemini
-        # Model defaultnya adalah gemini-2.5-flash
-        _model = genai.Client(api_key=API_KEY).models
+        # PERBAIKAN: Menggunakan genai.configure() untuk kompatibilitas SDK lama/luas
+        genai.configure(api_key=API_KEY)
         
         # Mock Database: Menggunakan session_state sebagai pengganti Firestore
         if 'mock_db' not in st.session_state:
-            # Struktur mock_db: 
-            # { user_id: { 'jawaban_siswa': [], 'timestamp': datetime, 'lkpd_title': str } }
             st.session_state.mock_db = {} 
-        _db = st.session_state.mock_db
         
         logger.info("✅ Gemini AI and Mock DB initialized.")
-        st.sidebar.success("🤖 Gemini gemini-2.5-flash READY")
-        return _db, _model
+        return True # Berhasil
         
     except Exception as e:
-        st.sidebar.error(f"Error in init_gemini: {e}")
+        st.sidebar.error(f"Error during Gemini configuration: {e}")
         logger.error(f"Initialization failed: {e}")
-        return None, None
+        return False # Gagal
 
 # --- Operasi Database (Mock Firestore) ---
 
 def load_lkpd() -> Optional[Dict[str, Any]]:
     """Memuat LKPD yang terakhir disimpan (dengan user_id='LKPD')."""
-    if _db and 'LKPD' in _db:
-        # LKPD data disimpan di 'jawaban_siswa' untuk konsistensi struktur
-        return _db['LKPD'].get('jawaban_siswa') 
+    if 'mock_db' in st.session_state and 'LKPD' in st.session_state.mock_db:
+        # Data LKPD disimpan di 'jawaban_siswa' untuk konsistensi struktur
+        return st.session_state.mock_db['LKPD'].get('jawaban_siswa') 
     return None
 
 def save_jawaban_siswa(user_id: str, data: Any, lkpd_title: str = "LKPD Terbaru"):
     """Menyimpan data LKPD atau jawaban siswa ke mock database."""
-    if not _db:
+    if 'mock_db' not in st.session_state:
         logger.error("Database not initialized.")
         return
         
-    _db[user_id] = {
+    # Menyimpan data dalam struktur dokumen tiruan
+    st.session_state.mock_db[user_id] = {
         'user_id': user_id,
         'lkpd_title': lkpd_title,
         'jawaban_siswa': data,
@@ -76,21 +70,24 @@ def save_jawaban_siswa(user_id: str, data: Any, lkpd_title: str = "LKPD Terbaru"
 
 def load_all_jawaban(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Memuat semua atau spesifik jawaban dari mock database."""
-    if not _db:
+    if 'mock_db' not in st.session_state:
         return []
     
     if user_id:
-        # Load spesifik jawaban
-        return [_db.get(user_id)] if user_id in _db else []
+        # Muat spesifik user
+        return [st.session_state.mock_db.get(user_id)] if user_id in st.session_state.mock_db else []
     else:
-        # Load semua jawaban
-        return list(_db.values())
+        # Muat semua data dari DB
+        return list(st.session_state.mock_db.values())
+
 
 # --- Fungsi Generasi Konten AI (LKPD) ---
 
 def generate_lkpd(theme: str) -> Optional[Dict[str, Any]]:
     """Meminta AI untuk membuat LKPD baru dan mengembalikan JSON yang divalidasi."""
-    if not _model: return None
+    if not genai.get_default_model(): 
+        logger.error("Gemini model is not configured.")
+        return None 
 
     # Prompt yang diperkuat untuk memaksa format JSON
     prompt = f"""
@@ -116,14 +113,13 @@ def generate_lkpd(theme: str) -> Optional[Dict[str, Any]]:
             {{"pertanyaan": "Pertanyaan wajib 2 yang membutuhkan analisis"}}
           ]
         }}
-        // Tambahkan kegiatan lain jika diperlukan
       ]
     }}
     """
     
     try:
-        # Menggunakan gemini-2.5-flash untuk kecepatan
-        response = _model.generate_content(
+        # Panggil API Gemini
+        response = genai.generate_content(
             model="gemini-2.5-flash", 
             contents=prompt
         )
@@ -137,11 +133,10 @@ def generate_lkpd(theme: str) -> Optional[Dict[str, Any]]:
             json_str_match = re.search(r'\{.*\}', response.text.strip(), re.DOTALL)
             if json_str_match:
                 json_str = json_str_match.group(0)
-                # Hilangkan backtick markdown jika ada
                 json_str = json_str.strip('`').strip()
                 data = json.loads(json_str)
             else:
-                # Gagal total, lempar error yang lebih jelas
+                # Gagal total
                 raise json.JSONDecodeError("Failed to find JSON block in AI response", response.text, 0)
         
         # 2. Safety Check (Validasi Kunci Wajib)
@@ -154,15 +149,13 @@ def generate_lkpd(theme: str) -> Optional[Dict[str, Any]]:
         
     except Exception as e:
         logger.error(f"Generate LKPD error: {e}")
-        # Tangkap dan tampilkan error yang ditangkap oleh try/except di app.py
-        st.error(f"❌ AI Error: Gagal mendapatkan LKPD dari AI. Detail: {e}")
         return None
 
 # --- Fungsi Penilaian AI ---
 
 def score_jawaban(jawaban_text: str, pertanyaan: str) -> Dict[str, Any]:
     """Meminta AI untuk menilai satu jawaban dan memberikan feedback."""
-    if not _model: return {"score": 0, "feedback": "AI Not Ready"}
+    if not genai.get_default_model(): return {"score": 0, "feedback": "AI Not Ready"}
 
     prompt = f"""
     Anda adalah penilai ahli. Berikan nilai 0-100 untuk 'Jawaban Siswa' berdasarkan 'Pertanyaan' dan berikan 'feedback' singkat.
@@ -175,33 +168,31 @@ def score_jawaban(jawaban_text: str, pertanyaan: str) -> Dict[str, Any]:
     """
     
     try:
-        response = _model.generate_content(
+        response = genai.generate_content(
             model="gemini-2.5-flash", 
             contents=prompt
         )
         
-        # LOGIKA JSON EXTRACTION BARU (Robustness Check KRITIS)
+        # LOGIKA JSON EXTRACTION BARU (Robustness Check)
         try:
             score_data = json.loads(response.text.strip())
         except json.JSONDecodeError:
             json_str_match = re.search(r'\{.*\}', response.text.strip(), re.DOTALL)
             if json_str_match:
                 json_str = json_str_match.group(0)
-                # Hilangkan backtick markdown jika ada
                 json_str = json_str.strip('`').strip()
                 score_data = json.loads(json_str)
             else:
                 raise json.JSONDecodeError("Failed to find JSON block in AI response", response.text, 0)
         
-        # Validasi skor harus berupa integer
+        # Validasi skor dan konversi ke int
         try:
             score_value = int(score_data.get('score', 0))
         except ValueError:
-            score_value = 0 # Jika skor bukan angka, set ke 0
+            score_value = 0 
             
         score_data['score'] = score_value
         
-        # Pastikan feedback ada
         if 'feedback' not in score_data:
             score_data['feedback'] = "Feedback tidak tersedia dari AI."
             
@@ -215,8 +206,9 @@ def score_jawaban(jawaban_text: str, pertanyaan: str) -> Dict[str, Any]:
         }
 
 def score_all_jawaban(all_jawaban: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Menilai semua jawaban siswa yang belum dinilai secara berurutan dan menyimpan hasilnya."""
-    if not _db: return []
+    """Menilai semua jawaban siswa yang belum dinilai dan menyimpan hasilnya."""
+    
+    if 'mock_db' not in st.session_state: return []
     
     results = []
     
@@ -228,13 +220,11 @@ def score_all_jawaban(all_jawaban: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         is_updated = False
         
         for j in jawaban_siswa:
-            # Hanya proses yang belum dinilai (score 0 atau 'Belum Dinilai' dari load)
-            if 'score' not in j or j.get('score') == 0 or j.get('score') == "Belum Dinilai": 
+            # Hanya proses yang belum dinilai atau skornya nol
+            if 'score' not in j or j.get('score') == 'Belum Dinilai' or j.get('score') == 0: 
                 
-                # Panggil AI untuk menilai
                 scoring_result = score_jawaban(j['jawaban'], j['pertanyaan'])
                 
-                # Update data jawaban dengan hasil scoring
                 j['score'] = scoring_result['score']
                 j['feedback'] = scoring_result['feedback']
                 is_updated = True
@@ -245,10 +235,11 @@ def score_all_jawaban(all_jawaban: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             # Simpan data yang telah dinilai kembali ke mock database
             save_jawaban_siswa(user_id, updated_jawaban, item['lkpd_title'])
             
+        # Membuat ringkasan hasil untuk dikembalikan ke guru_jawaban_page
         results.append({
             "Siswa": user_id.replace('Siswa_', ''),
             "Jumlah Soal": len(updated_jawaban),
-            "Skor Total": sum(j.get('score', 0) for j in updated_jawaban),
+            "Skor Total": sum(j.get('score', 0) if isinstance(j.get('score'), int) else 0 for j in updated_jawaban),
             "Status": "Dinilai Ulang" if is_updated else "Sudah Dinilai"
         })
 

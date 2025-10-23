@@ -1,255 +1,355 @@
-import google.generativeai as genai
 import streamlit as st
-import os
-import json
-import uuid
-from datetime import datetime
-import logging
-from typing import Optional, Dict, Any, List
-import re # Diperlukan untuk ekstraksi JSON yang lebih robust
+import pandas as pd
+from gemini_config import (
+    init_gemini, 
+    load_lkpd, 
+    save_jawaban_siswa, 
+    load_all_jawaban, 
+    generate_lkpd, 
+    score_jawaban,
+    score_all_jawaban,
+    logger
+)
 
-# --- Konfigurasi dan Logger ---
-# Inisialisasi logger untuk debugging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+# --- Konfigurasi Halaman ---
+st.set_page_config(
+    page_title="EduAI LMS Interaktif",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Variabel global untuk instance
-_model = None
-_db = None
+# --- Inisialisasi Sesi State ---
+if 'page' not in st.session_state:
+    st.session_state.page = 'guru'
+if 'lkpd_data' not in st.session_state:
+    st.session_state.lkpd_data = load_lkpd()
+if 'lkpd_theme' not in st.session_state:
+    st.session_state.lkpd_theme = ""
+if 'current_user' not in st.session_state:
+    st.session_state.current_user = "Guru" # Default pengguna
 
-# --- Inisialisasi Gemini API dan Database (Firestore Mock) ---
+# --- Inisialisasi Model AI dan Database ---
+db, _ = init_gemini()
 
-# Fungsi yang di-cache untuk inisialisasi satu kali
-@st.cache_resource(show_spinner=False)
-def init_gemini():
-    """Menginisialisasi Model Gemini dan Mock Database."""
-    global _model, _db
+# Tampilkan status koneksi di sidebar
+st.sidebar.markdown(f"**Status Koneksi:**")
+if db:
+    st.sidebar.success("Database & Gemini AI Ready!")
+else:
+    st.sidebar.error("Database/Gemini AI Not Ready.")
     
-    # Dapatkan API Key dari secrets Streamlit
-    # Gunakan variabel kosong jika tidak ada secret (asumsi environment akan menyediakannya)
-    API_KEY = st.secrets.get("GEMINI_API_KEY", "") 
+# Tampilkan nama pengguna saat ini
+st.sidebar.info(f"Anda masuk sebagai: **{st.session_state.current_user}**")
+st.sidebar.divider()
+
+# --- Fungsi Pindah Halaman ---
+def set_page(page_name):
+    st.session_state.page = page_name
+
+# --- Sidebar Navigasi ---
+st.sidebar.header("Navigasi")
+
+if st.session_state.page.startswith('siswa'):
+    # Mode Siswa
+    if st.sidebar.button("Kembali ke Halaman Siswa"):
+        set_page('siswa')
+    if st.sidebar.button("Lihat Nilai/Feedback"):
+        set_page('siswa_nilai')
+    if st.sidebar.button("Ganti Pengguna (Guru)"):
+        st.session_state.current_user = "Guru"
+        st.session_state.page = 'guru'
+        st.rerun()
+
+elif st.session_state.page.startswith('guru'):
+    # Mode Guru
+    if st.sidebar.button("Halaman Utama Guru"):
+        set_page('guru')
+    if st.sidebar.button("Lihat Jawaban Siswa"):
+        set_page('guru_jawaban')
+    if st.sidebar.button("Ganti Pengguna (Siswa)"):
+        st.session_state.current_user = f"Siswa_{st.sidebar.text_input('Nama Siswa', 'Budi')}"
+        st.session_state.page = 'siswa'
+        st.rerun()
+
+st.sidebar.divider()
+
+
+# --- Tampilan Halaman Guru ---
+
+def guru_page():
+    st.title("👨‍🏫 Dashboard Guru: Pembuatan LKPD AI")
+
+    # 1. Input Tema LKPD
+    st.subheader("1. Tentukan Tema LKPD")
+    col1, col2 = st.columns([3, 1])
     
-    # Jika API_KEY kosong, setelannya akan ditangani oleh genai.Client
-    try:
-        # Inisialisasi Model Gemini
-        # Model defaultnya adalah gemini-2.5-flash
-        _model = genai.Client(api_key=API_KEY).models
-        
-        # Mock Database: Menggunakan session_state sebagai pengganti Firestore
-        if 'mock_db' not in st.session_state:
-            # Struktur mock_db: 
-            # { user_id: { 'jawaban_siswa': [], 'timestamp': datetime, 'lkpd_title': str } }
-            st.session_state.mock_db = {} 
-        _db = st.session_state.mock_db
-        
-        logger.info("✅ Gemini AI and Mock DB initialized.")
-        st.sidebar.success("🤖 Gemini gemini-2.5-flash READY")
-        return _db, _model
-        
-    except Exception as e:
-        st.sidebar.error(f"Error in init_gemini: {e}")
-        logger.error(f"Initialization failed: {e}")
-        return None, None
-
-# --- Operasi Database (Mock Firestore) ---
-
-def load_lkpd() -> Optional[Dict[str, Any]]:
-    """Memuat LKPD yang terakhir disimpan (dengan user_id='LKPD')."""
-    if _db and 'LKPD' in _db:
-        # LKPD data disimpan di 'jawaban_siswa' untuk konsistensi struktur
-        return _db['LKPD'].get('jawaban_siswa') 
-    return None
-
-def save_jawaban_siswa(user_id: str, data: Any, lkpd_title: str = "LKPD Terbaru"):
-    """Menyimpan data LKPD atau jawaban siswa ke mock database."""
-    if not _db:
-        logger.error("Database not initialized.")
-        return
-        
-    _db[user_id] = {
-        'user_id': user_id,
-        'lkpd_title': lkpd_title,
-        'jawaban_siswa': data,
-        'timestamp': datetime.now()
-    }
-    logger.info(f"Data saved for user_id: {user_id}")
-
-def load_all_jawaban(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Memuat semua atau spesifik jawaban dari mock database."""
-    if not _db:
-        return []
+    theme_input = col1.text_input(
+        "Masukkan Tema Pembelajaran (misal: Hukum Newton Kelas X, Pembentukan Sel Kelas XI)", 
+        value=st.session_state.lkpd_theme,
+        key="theme_input_key"
+    )
     
-    if user_id:
-        # Load spesifik jawaban
-        return [_db.get(user_id)] if user_id in _db else []
+    # 2. Tombol Generate LKPD
+    if col2.button("🚀 Generate LKPD", use_container_width=True):
+        if not db:
+            st.error("Koneksi Gemini/Database belum siap. Mohon cek status di sidebar.")
+            return
+
+        st.session_state.lkpd_theme = theme_input
+        with st.spinner(f"AI sedang membuat LKPD untuk tema: **{theme_input}**..."):
+            new_lkpd = generate_lkpd(theme_input)
+        
+        if new_lkpd:
+            st.session_state.lkpd_data = new_lkpd
+            save_jawaban_siswa("LKPD", new_lkpd) # Simpan LKPD ke DB
+            st.success("LKPD berhasil dibuat dan disimpan!")
+        else:
+            st.error("Gagal mendapatkan LKPD dari AI. Cek log atau coba tema lain.")
+            st.session_state.lkpd_data = None
+
+
+    st.divider()
+
+    # 3. Tampilkan LKPD
+    if st.session_state.lkpd_data:
+        lkpd = st.session_state.lkpd_data
+        st.subheader(f"2. Pratinjau LKPD: {lkpd.get('judul', 'Judul Tidak Ada')}")
+        
+        st.info(f"**Tujuan Pembelajaran:** {', '.join(lkpd.get('tujuan_pembelajaran', ['-']))}")
+        
+        with st.expander("Materi Singkat"):
+            st.markdown(lkpd.get('materi_singkat', 'Materi tidak tersedia.'))
+            
+        st.markdown("---")
+        
+        for i, kegiatan in enumerate(lkpd.get('kegiatan', [])):
+            st.markdown(f"#### 📝 Kegiatan {i+1}: {kegiatan.get('nama', 'Kegiatan Tanpa Nama')}")
+            st.markdown(f"**Petunjuk:** {kegiatan.get('petunjuk', '-')}")
+            
+            # Tampilkan Tugas Interaktif
+            st.markdown("**Tugas Interaktif (Instruksi):**")
+            for j, tugas in enumerate(kegiatan.get('tugas_interaktif', [])):
+                st.markdown(f"- {tugas}")
+            
+            # Tampilkan Pertanyaan Pemantik
+            st.markdown("**Pertanyaan Pemantik (Akan dijawab Siswa):**")
+            for k, q_obj in enumerate(kegiatan.get('pertanyaan_pemantik', [])):
+                st.markdown(f"**{i+1}.{k+1}.** {q_obj.get('pertanyaan', 'Pertanyaan tidak ada')}")
+            
+            st.markdown("---")
     else:
-        # Load semua jawaban
-        return list(_db.values())
+        st.info("Silakan masukkan tema dan klik 'Generate LKPD' untuk memulai.")
 
-# --- Fungsi Generasi Konten AI (LKPD) ---
+def guru_jawaban_page():
+    st.title("📚 Dashboard Guru: Hasil Jawaban Siswa")
 
-def generate_lkpd(theme: str) -> Optional[Dict[str, Any]]:
-    """Meminta AI untuk membuat LKPD baru dan mengembalikan JSON yang divalidasi."""
-    if not _model: return None
+    # 1. Load Semua Jawaban Siswa
+    all_jawaban = load_all_jawaban()
+    
+    if not all_jawaban:
+        st.warning("Belum ada jawaban siswa yang tersimpan.")
+        return
 
-    # Prompt yang diperkuat untuk memaksa format JSON
-    prompt = f"""
-    Anda adalah pakar kurikulum dan perancang LKPD (Lembar Kerja Peserta Didik).
-    Buat LKPD INTERAKTIF untuk tema "{theme}" SMP/SMA.
+    # Filter data hanya untuk jawaban (bukan LKPD asli)
+    jawaban_siswa = [item for item in all_jawaban if item['user_id'] != 'LKPD']
     
-    **OUTPUT HANYA JSON VALID** (Tanpa Markdown/backtick, tanpa penjelasan di luar JSON).
-    
-    Pastikan JSON mengandung SEMUA kunci wajib berikut: 'judul', 'tujuan_pembelajaran', 'materi_singkat', dan 'kegiatan'.
-    
-    Format JSON harus:
-    {{
-      "judul": "Judul LKPD yang menarik dan sesuai tema",
-      "tujuan_pembelajaran": ["Tujuan 1", "Tujuan 2", "Daftar tujuan pembelajaran yang relevan"],
-      "materi_singkat": "Ringkasan materi 2-3 paragraf.",
-      "kegiatan": [
-        {{
-          "nama": "Nama Kegiatan 1 (Misal: Eksplorasi Konsep)",
-          "petunjuk": "Petunjuk jelas untuk siswa...",
-          "tugas_interaktif": ["Instruksi tugas 1", "Instruksi tugas 2"],
-          "pertanyaan_pemantik": [
-            {{"pertanyaan": "Pertanyaan wajib 1 terkait konsep utama"}},
-            {{"pertanyaan": "Pertanyaan wajib 2 yang membutuhkan analisis"}}
-          ]
-        }}
-        // Tambahkan kegiatan lain jika diperlukan
-      ]
-    }}
-    """
-    
-    try:
-        # Menggunakan gemini-2.5-flash untuk kecepatan
-        response = _model.generate_content(
-            model="gemini-2.5-flash", 
-            contents=prompt
-        )
-        
-        # 1. Agresif mencari blok JSON dalam respons (robustness check KRITIS)
-        try:
-            # Mencoba decode langsung
-            data = json.loads(response.text.strip())
-        except json.JSONDecodeError:
-            # Jika gagal, coba ekstrak konten antara tanda kurung kurawal
-            json_str_match = re.search(r'\{.*\}', response.text.strip(), re.DOTALL)
-            if json_str_match:
-                json_str = json_str_match.group(0)
-                # Hilangkan backtick markdown jika ada
-                json_str = json_str.strip('`').strip()
-                data = json.loads(json_str)
-            else:
-                # Gagal total, lempar error yang lebih jelas
-                raise json.JSONDecodeError("Failed to find JSON block in AI response", response.text, 0)
-        
-        # 2. Safety Check (Validasi Kunci Wajib)
-        required_keys = ['judul', 'tujuan_pembelajaran', 'materi_singkat', 'kegiatan']
-        if not all(key in data for key in required_keys):
-            raise ValueError(f"Missing required keys in final JSON structure. Required: {required_keys}")
-        
-        logger.info(f"✅ LKPD generated for theme: {theme}")
-        return data
-        
-    except Exception as e:
-        logger.error(f"Generate LKPD error: {e}")
-        # Tangkap dan tampilkan error yang ditangkap oleh try/except di app.py
-        st.error(f"❌ AI Error: Gagal mendapatkan LKPD dari AI. Detail: {e}")
-        return None
+    if not jawaban_siswa:
+        st.warning("Belum ada jawaban siswa yang tersimpan.")
+        return
 
-# --- Fungsi Penilaian AI ---
-
-def score_jawaban(jawaban_text: str, pertanyaan: str) -> Dict[str, Any]:
-    """Meminta AI untuk menilai satu jawaban dan memberikan feedback."""
-    if not _model: return {"score": 0, "feedback": "AI Not Ready"}
-
-    prompt = f"""
-    Anda adalah penilai ahli. Berikan nilai 0-100 untuk 'Jawaban Siswa' berdasarkan 'Pertanyaan' dan berikan 'feedback' singkat.
-    
-    Pertanyaan: {pertanyaan}
-    Jawaban Siswa: {jawaban_text}
-    
-    Hanya hasilkan **JSON VALID** dengan kunci 'score' (int 0-100) dan 'feedback' (string). Jangan ada teks tambahan.
-    Contoh: {{"score": 85, "feedback": "Jawaban Anda sangat lengkap dan relevan..."}}
-    """
-    
-    try:
-        response = _model.generate_content(
-            model="gemini-2.5-flash", 
-            contents=prompt
-        )
-        
-        # LOGIKA JSON EXTRACTION BARU (Robustness Check KRITIS)
-        try:
-            score_data = json.loads(response.text.strip())
-        except json.JSONDecodeError:
-            json_str_match = re.search(r'\{.*\}', response.text.strip(), re.DOTALL)
-            if json_str_match:
-                json_str = json_str_match.group(0)
-                # Hilangkan backtick markdown jika ada
-                json_str = json_str.strip('`').strip()
-                score_data = json.loads(json_str)
-            else:
-                raise json.JSONDecodeError("Failed to find JSON block in AI response", response.text, 0)
-        
-        # Validasi skor harus berupa integer
-        try:
-            score_value = int(score_data.get('score', 0))
-        except ValueError:
-            score_value = 0 # Jika skor bukan angka, set ke 0
-            
-        score_data['score'] = score_value
-        
-        # Pastikan feedback ada
-        if 'feedback' not in score_data:
-            score_data['feedback'] = "Feedback tidak tersedia dari AI."
-            
-        logger.info(f"📊 Scored: {score_value}")
-        return score_data
-    except Exception as e:
-        logger.error(f"Scoring error for: {jawaban_text[:30]}... Detail: {e}")
-        return {
-            "score": 0,
-            "feedback": f"Gagal mendapatkan penilaian AI karena error format: {e}"
-        }
-
-def score_all_jawaban(all_jawaban: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Menilai semua jawaban siswa yang belum dinilai secara berurutan dan menyimpan hasilnya."""
-    if not _db: return []
-    
-    results = []
-    
-    for item in all_jawaban:
-        user_id = item['user_id']
-        jawaban_siswa = item['jawaban_siswa']
-        
-        updated_jawaban = []
-        is_updated = False
-        
-        for j in jawaban_siswa:
-            # Hanya proses yang belum dinilai (score 0 atau 'Belum Dinilai' dari load)
-            if 'score' not in j or j.get('score') == 0 or j.get('score') == "Belum Dinilai": 
-                
-                # Panggil AI untuk menilai
-                scoring_result = score_jawaban(j['jawaban'], j['pertanyaan'])
-                
-                # Update data jawaban dengan hasil scoring
-                j['score'] = scoring_result['score']
-                j['feedback'] = scoring_result['feedback']
-                is_updated = True
-            
-            updated_jawaban.append(j)
-
-        if is_updated:
-            # Simpan data yang telah dinilai kembali ke mock database
-            save_jawaban_siswa(user_id, updated_jawaban, item['lkpd_title'])
-            
-        results.append({
-            "Siswa": user_id.replace('Siswa_', ''),
-            "Jumlah Soal": len(updated_jawaban),
-            "Skor Total": sum(j.get('score', 0) for j in updated_jawaban),
-            "Status": "Dinilai Ulang" if is_updated else "Sudah Dinilai"
+    # 2. Tampilkan Ringkasan dalam DataFrame
+    data_summary = []
+    for item in jawaban_siswa:
+        data_summary.append({
+            "Siswa": item['user_id'].replace('Siswa_', ''),
+            "Tanggal": item['timestamp'].strftime("%Y-%m-%d %H:%M"),
+            "Jumlah Soal": len(item['jawaban_siswa']),
+            "Sudah Dinilai": sum(1 for j in item['jawaban_siswa'] if 'score' in j),
+            "Skor Total": sum(j.get('score', 0) for j in item['jawaban_siswa'])
         })
+    
+    df = pd.DataFrame(data_summary)
+    st.subheader("Ringkasan Nilai Siswa")
+    st.dataframe(df, use_container_width=True)
+    
+    st.divider()
+    
+    # 3. Proses Penilaian
+    st.subheader("Proses Penilaian Jawaban")
 
-    return results
+    if st.button("✨ Nilai Semua Jawaban Siswa"):
+        if not db:
+            st.error("Koneksi Gemini/Database belum siap.")
+            return
+
+        with st.spinner("AI sedang menilai semua jawaban siswa... Proses ini mungkin memakan waktu."):
+            try:
+                # Memanggil fungsi scoring yang telah di-robust
+                results = score_all_jawaban(jawaban_siswa) 
+                
+                # Tampilkan hasil penilaian
+                st.success("Penilaian Selesai!")
+                st.dataframe(pd.DataFrame(results), use_container_width=True)
+
+            except Exception as e:
+                st.error(f"Gagal saat proses penilaian massal: {e}")
+                logger.error(f"Error during mass scoring: {e}")
+
+    st.divider()
+
+    # 4. Detail Jawaban Siswa
+    st.subheader("Detail Jawaban Siswa")
+    
+    selected_user = st.selectbox(
+        "Pilih Siswa untuk melihat detail:",
+        options=[item['user_id'] for item in jawaban_siswa]
+    )
+    
+    if selected_user:
+        detail_data = next((item for item in jawaban_siswa if item['user_id'] == selected_user), None)
+        if detail_data:
+            st.markdown(f"#### Hasil untuk {selected_user.replace('Siswa_', '')} (LKPD: {detail_data.get('lkpd_title', 'Tanpa Judul')})")
+            
+            for i, j in enumerate(detail_data['jawaban_siswa']):
+                score = j.get('score', 'Belum Dinilai')
+                feedback = j.get('feedback', 'Belum Dinilai')
+
+                # Menampilkan pertanyaan, jawaban, skor, dan feedback
+                with st.container(border=True):
+                    st.markdown(f"**Pertanyaan {i+1}:** {j['pertanyaan']}")
+                    st.markdown(f"**Jawaban Siswa:** {j['jawaban']}")
+                    st.markdown(f"**Nilai:** **{score}** / 100")
+                    st.markdown(f"**Feedback AI:** {feedback}")
+                    
+# --- Tampilan Halaman Siswa ---
+
+def siswa_page():
+    st.title(f"🧑‍🎓 Halaman Siswa: {st.session_state.current_user.replace('Siswa_', '')}")
+    
+    # 1. Load LKPD terbaru (yang sudah di-generate Guru)
+    lkpd = st.session_state.lkpd_data
+    
+    if not lkpd:
+        st.warning("LKPD belum tersedia. Mohon Guru membuat LKPD terlebih dahulu.")
+        return
+
+    st.header(lkpd.get('judul', 'LKPD Interaktif'))
+    st.info(f"**Tujuan Pembelajaran:** {', '.join(lkpd.get('tujuan_pembelajaran', ['-']))}")
+    
+    with st.expander("Materi Singkat"):
+        st.markdown(lkpd.get('materi_singkat', 'Materi tidak tersedia.'))
+    
+    st.markdown("---")
+    
+    # 2. Formulir Jawaban Siswa
+    
+    jawaban_form = st.container()
+    
+    # Memuat jawaban yang sudah ada untuk pengguna ini (jika ada)
+    all_jawaban_user = load_all_jawaban(user_id=st.session_state.current_user)
+    current_jawaban = next((item for item in all_jawaban_user if item['user_id'] == st.session_state.current_user), None)
+    
+    # Inisialisasi daftar jawaban siswa untuk formulir
+    if 'siswa_answers' not in st.session_state:
+        # Jika ada jawaban tersimpan, gunakan itu. Jika tidak, buat struktur kosong.
+        if current_jawaban:
+             # Menggunakan jawaban yang tersimpan
+            st.session_state.siswa_answers = [j['jawaban'] for j in current_jawaban['jawaban_siswa']]
+        else:
+            # Struktur jawaban kosong berdasarkan jumlah pertanyaan di LKPD
+            total_questions = sum(len(kegiatan.get('pertanyaan_pemantik', [])) for kegiatan in lkpd.get('kegiatan', []))
+            st.session_state.siswa_answers = [""] * total_questions
+        
+    
+    # Tampilkan formulir
+    with jawaban_form:
+        st.subheader("Jawab Pertanyaan Pemantik")
+        
+        # Iterasi melalui semua pertanyaan di LKPD
+        q_idx = 0
+        all_questions = []
+        for i, kegiatan in enumerate(lkpd.get('kegiatan', [])):
+            st.markdown(f"##### Kegiatan {i+1}: {kegiatan.get('nama', 'Kegiatan Tanpa Nama')}")
+            
+            for j, q_obj in enumerate(kegiatan.get('pertanyaan_pemantik', [])):
+                pertanyaan_text = q_obj.get('pertanyaan', f"Pertanyaan {q_idx+1} tidak ada")
+                
+                # Tambahkan pertanyaan ke daftar global untuk saving
+                all_questions.append(pertanyaan_text) 
+                
+                # Tampilkan area teks untuk jawaban
+                st.text_area(
+                    label=f"**{q_idx+1}.** {pertanyaan_text}",
+                    value=st.session_state.siswa_answers[q_idx],
+                    key=f"answer_{q_idx}",
+                    help="Jawab pertanyaan ini di sini."
+                )
+                q_idx += 1
+                
+        # 3. Tombol Simpan Jawaban
+        if st.button("💾 Simpan Jawaban", type="primary"):
+            if not db:
+                st.error("Koneksi database tidak tersedia.")
+                return
+            
+            # Kumpulkan jawaban dari state form
+            siswa_data = []
+            for idx, q_text in enumerate(all_questions):
+                siswa_data.append({
+                    "pertanyaan": q_text,
+                    "jawaban": st.session_state[f"answer_{idx}"]
+                })
+            
+            # Simpan ke database
+            save_jawaban_siswa(st.session_state.current_user, siswa_data, lkpd.get('judul', 'LKPD Tanpa Judul'))
+            st.success("Jawaban Anda berhasil disimpan!")
+            st.session_state.siswa_answers = [d['jawaban'] for d in siswa_data] # Update state for next load
+
+def siswa_nilai_page():
+    st.title(f"💯 Hasil Penilaian LKPD")
+
+    # 1. Load Jawaban Siswa
+    all_jawaban_user = load_all_jawaban(user_id=st.session_state.current_user)
+    current_jawaban = next((item for item in all_jawaban_user if item['user_id'] == st.session_state.current_user), None)
+    
+    if not current_jawaban:
+        st.warning("Anda belum menyimpan jawaban apapun.")
+        return
+
+    st.info(f"LKPD: **{current_jawaban.get('lkpd_title', 'Tanpa Judul')}** | Disimpan pada: **{current_jawaban['timestamp'].strftime('%d %B %Y %H:%M')}**")
+    
+    total_score = sum(j.get('score', 0) for j in current_jawaban['jawaban_siswa'])
+    total_questions = len(current_jawaban['jawaban_siswa'])
+    
+    st.markdown(f"## Skor Total Anda: **{total_score}** / {total_questions * 100}")
+    st.divider()
+    
+    # 2. Tampilkan Detail Jawaban, Skor, dan Feedback
+    for i, j in enumerate(current_jawaban['jawaban_siswa']):
+        score = j.get('score', 'Belum Dinilai')
+        feedback = j.get('feedback', 'Belum Dinilai')
+        
+        container_color = "success" if isinstance(score, int) and score >= 50 else "warning" if isinstance(score, int) else "info"
+
+        with st.container(border=True):
+            st.markdown(f"**Pertanyaan {i+1}:** {j['pertanyaan']}")
+            st.markdown(f"**Jawaban Anda:** {j['jawaban']}")
+            st.markdown("---")
+            
+            if score == 'Belum Dinilai':
+                st.info("Nilai dan Feedback AI akan muncul di sini setelah Guru memproses penilaian.")
+            else:
+                st.markdown(f"**Nilai AI:** <span style='font-size: 1.5em; font-weight: bold;'>{score} / 100</span>", unsafe_allow_html=True)
+                st.markdown(f"**Feedback AI:** {feedback}")
+        
+    st.divider()
+
+# --- Pengendali Halaman Utama ---
+if st.session_state.page == 'guru':
+    guru_page()
+elif st.session_state.page == 'guru_jawaban':
+    guru_jawaban_page()
+elif st.session_state.page == 'siswa':
+    siswa_page()
+elif st.session_state.page == 'siswa_nilai':
+    siswa_nilai_page()

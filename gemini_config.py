@@ -9,7 +9,6 @@ from typing import Optional, Dict, Any, List
 import re 
 
 # --- Konfigurasi dan Logger ---
-# Mengatur logger untuk debugging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -17,19 +16,29 @@ logger.setLevel(logging.INFO)
 
 @st.cache_resource(show_spinner=False)
 def init_gemini() -> bool:
-    """Menginisialisasi Konfigurasi Gemini dan Mock Database. Mengembalikan status bool."""
+    """
+    Menginisialisasi Konfigurasi Gemini dengan 3 lapis otentikasi (Manual > Secrets > Env). 
+    Mengembalikan status bool koneksi AI/DB.
+    """
     
-    # Mencoba mendapatkan API Key dari Streamlit Secrets
-    # Asumsikan 'GEMINI_API_KEY' ada di file .streamlit/secrets.toml
-    API_KEY = st.secrets.get("GEMINI_API_KEY", "") 
+    # 1. Lapis Pertama: Input Manual dari Sidebar (dari app.py)
+    API_KEY = st.session_state.get('manual_api_key', '')
     
+    # 2. Lapis Kedua: Streamlit Secrets
     if not API_KEY:
-        # Jika kunci tidak ditemukan, tampilkan error dan kembalikan False
-        st.sidebar.error("❌ GEMINI_API_KEY tidak ditemukan di Secrets.")
+        API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+        
+    # 3. Lapis Ketiga: Environment Variables
+    if not API_KEY:
+        API_KEY = os.environ.get("GEMINI_API_KEY", "")
+        
+    # Final Check
+    if not API_KEY:
+        st.sidebar.error("❌ Kunci API Gemini tidak ditemukan di mana pun (Secrets/Env/Input).")
         return False
     
     try:
-        # PERBAIKAN: Menggunakan genai.configure() untuk kompatibilitas SDK lama/luas
+        # Menggunakan genai.configure() untuk kompatibilitas SDK yang lebih luas
         genai.configure(api_key=API_KEY)
         
         # Mock Database: Menggunakan session_state sebagai pengganti Firestore
@@ -40,7 +49,8 @@ def init_gemini() -> bool:
         return True # Berhasil
         
     except Exception as e:
-        st.sidebar.error(f"Error during Gemini configuration: {e}")
+        # Jika konfigurasi gagal (biasanya karena kunci tidak valid)
+        st.sidebar.error(f"Error saat mengkonfigurasi Gemini AI. Kunci mungkin tidak valid.")
         logger.error(f"Initialization failed: {e}")
         return False # Gagal
 
@@ -49,7 +59,6 @@ def init_gemini() -> bool:
 def load_lkpd() -> Optional[Dict[str, Any]]:
     """Memuat LKPD yang terakhir disimpan (dengan user_id='LKPD')."""
     if 'mock_db' in st.session_state and 'LKPD' in st.session_state.mock_db:
-        # Data LKPD disimpan di 'jawaban_siswa' untuk konsistensi struktur
         return st.session_state.mock_db['LKPD'].get('jawaban_siswa') 
     return None
 
@@ -59,7 +68,6 @@ def save_jawaban_siswa(user_id: str, data: Any, lkpd_title: str = "LKPD Terbaru"
         logger.error("Database not initialized.")
         return
         
-    # Menyimpan data dalam struktur dokumen tiruan
     st.session_state.mock_db[user_id] = {
         'user_id': user_id,
         'lkpd_title': lkpd_title,
@@ -74,10 +82,8 @@ def load_all_jawaban(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         return []
     
     if user_id:
-        # Muat spesifik user
         return [st.session_state.mock_db.get(user_id)] if user_id in st.session_state.mock_db else []
     else:
-        # Muat semua data dari DB
         return list(st.session_state.mock_db.values())
 
 
@@ -89,7 +95,6 @@ def generate_lkpd(theme: str) -> Optional[Dict[str, Any]]:
         logger.error("Gemini model is not configured.")
         return None 
 
-    # Prompt yang diperkuat untuk memaksa format JSON
     prompt = f"""
     Anda adalah pakar kurikulum dan perancang LKPD (Lembar Kerja Peserta Didik).
     Buat LKPD INTERAKTIF untuk tema "{theme}" SMP/SMA.
@@ -118,7 +123,6 @@ def generate_lkpd(theme: str) -> Optional[Dict[str, Any]]:
     """
     
     try:
-        # Panggil API Gemini
         response = genai.generate_content(
             model="gemini-2.5-flash", 
             contents=prompt
@@ -126,17 +130,14 @@ def generate_lkpd(theme: str) -> Optional[Dict[str, Any]]:
         
         # 1. Agresif mencari blok JSON dalam respons (robustness check KRITIS)
         try:
-            # Mencoba decode langsung
             data = json.loads(response.text.strip())
         except json.JSONDecodeError:
-            # Jika gagal, coba ekstrak konten antara tanda kurung kurawal
             json_str_match = re.search(r'\{.*\}', response.text.strip(), re.DOTALL)
             if json_str_match:
                 json_str = json_str_match.group(0)
                 json_str = json_str.strip('`').strip()
                 data = json.loads(json_str)
             else:
-                # Gagal total
                 raise json.JSONDecodeError("Failed to find JSON block in AI response", response.text, 0)
         
         # 2. Safety Check (Validasi Kunci Wajib)
@@ -232,10 +233,8 @@ def score_all_jawaban(all_jawaban: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             updated_jawaban.append(j)
 
         if is_updated:
-            # Simpan data yang telah dinilai kembali ke mock database
             save_jawaban_siswa(user_id, updated_jawaban, item['lkpd_title'])
             
-        # Membuat ringkasan hasil untuk dikembalikan ke guru_jawaban_page
         results.append({
             "Siswa": user_id.replace('Siswa_', ''),
             "Jumlah Soal": len(updated_jawaban),

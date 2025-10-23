@@ -1,0 +1,3 @@
+streamlit>=1.38.0
+google-generativeai>=0.8.5
+pandas>=2.2.2

@@ -1,37 +1,38 @@
 import streamlit as st
 import pandas as pd
+# Mengimpor semua fungsi yang diperlukan dari konfigurasi AI dan Database
 from gemini_config import (
     init_gemini, 
     load_lkpd, 
     save_jawaban_siswa, 
     load_all_jawaban, 
     generate_lkpd, 
-    score_all_jawaban, # Hanya score_all_jawaban yang dipanggil di app.py
-    logger # Pastikan logger diimpor
+    score_all_jawaban, 
+    logger 
 )
 
-# --- Konfigurasi Halaman ---
+# --- Konfigurasi Halaman Streamlit ---
 st.set_page_config(
     page_title="EduAI LMS Interaktif",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- Inisialisasi Sesi State ---
+# --- Inisialisasi Sesi State (Status Aplikasi) ---
 if 'page' not in st.session_state:
     st.session_state.page = 'guru'
 if 'lkpd_data' not in st.session_state:
-    st.session_state.lkpd_data = load_lkpd() # Memuat LKPD terakhir
+    st.session_state.lkpd_data = load_lkpd() 
 if 'lkpd_theme' not in st.session_state:
     st.session_state.lkpd_theme = ""
 if 'current_user' not in st.session_state:
-    st.session_state.current_user = "Guru" # Default pengguna
+    st.session_state.current_user = "Guru" 
 if 'siswa_answers' not in st.session_state:
     st.session_state.siswa_answers = [] 
 if 'manual_api_key' not in st.session_state:
-    st.session_state.manual_api_key = "" # Kunci baru untuk API key manual
+    st.session_state.manual_api_key = "" 
 
-# --- INPUT KUNCI API (Solusi agar aplikasi jalan) ---
+# --- Sidebar: Input Kunci API & Status Koneksi ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔑 Kunci API Gemini")
 st.session_state.manual_api_key = st.sidebar.text_input(
@@ -44,15 +45,14 @@ st.sidebar.markdown("---")
 
 
 # --- Inisialisasi Model AI dan Database ---
-# init_gemini sekarang mengembalikan status boolean (status DB)
+# init_gemini akan menjalankan fungsi konfigurasi dan inisialisasi database mock
 db_ready = init_gemini()
-# AI_READY diambil dari global variable di gemini_config.py
+# Mengambil status AI dari variabel global yang diupdate oleh init_gemini
 from gemini_config import AI_READY 
 
 # Tampilkan status koneksi di sidebar
 st.sidebar.markdown(f"**Status Koneksi:**")
 
-# Pesan Status Koneksi
 if db_ready and AI_READY:
     st.sidebar.success("Database & Gemini AI Ready! 🎉")
 elif db_ready and not AI_READY:
@@ -60,23 +60,22 @@ elif db_ready and not AI_READY:
 else:
     st.sidebar.error("Database/Gemini AI Not Ready.")
     
-# Tampilkan status API (untuk debugging)
 if AI_READY:
     st.sidebar.markdown("Status API: **TERHUBUNG**")
 else:
     st.sidebar.markdown("Status API: **GAGAL**")
     
-# Tampilkan nama pengguna saat ini
 st.sidebar.info(f"Anda masuk sebagai: **{st.session_state.current_user}**")
 st.sidebar.divider()
 
-# --- Fungsi Pindah Halaman (Sama seperti sebelumnya) ---
+# --- Fungsi Pindah Halaman ---
 def set_page(page_name):
+    """Mengatur halaman saat ini dan mereset state siswa jika perlu."""
     st.session_state.page = page_name
     if page_name == 'siswa':
         st.session_state.siswa_answers = [] 
 
-# --- Sidebar Navigasi (Sama seperti sebelumnya) ---
+# --- Sidebar Navigasi ---
 st.sidebar.header("Navigasi")
 
 if st.session_state.page.startswith('siswa'):
@@ -96,7 +95,7 @@ elif st.session_state.page.startswith('guru'):
         set_page('guru')
     if st.sidebar.button("Lihat Jawaban Siswa"):
         set_page('guru_jawaban')
-    # Penamaan pengguna siswa dilakukan saat tombol ini ditekan
+        
     siswa_name_input = st.sidebar.text_input('Nama Siswa', 'Budi')
     if st.sidebar.button("Ganti Pengguna (Siswa)"):
         st.session_state.current_user = f"Siswa_{siswa_name_input}"
@@ -106,7 +105,7 @@ elif st.session_state.page.startswith('guru'):
 st.sidebar.divider()
 
 
-# --- Tampilan Halaman Guru ---
+# --- Tampilan Halaman Guru: Pembuatan LKPD ---
 
 def guru_page():
     st.title("👨‍🏫 Dashboard Guru: Pembuatan LKPD AI")
@@ -123,7 +122,7 @@ def guru_page():
     
     # 2. Tombol Generate LKPD
     if col2.button("🚀 Generate LKPD", use_container_width=True):
-        if not AI_READY: # Menggunakan AI_READY status
+        if not AI_READY: 
             st.error("Koneksi Gemini AI belum siap. Mohon cek status di sidebar dan masukkan Kunci API.")
             return
 
@@ -133,7 +132,7 @@ def guru_page():
         
         if new_lkpd:
             st.session_state.lkpd_data = new_lkpd
-            save_jawaban_siswa("LKPD", new_lkpd) # Simpan LKPD ke DB
+            save_jawaban_siswa("LKPD", new_lkpd, new_lkpd.get('judul', 'LKPD Tanpa Judul')) # Simpan LKPD ke DB sebagai master
             st.success("LKPD berhasil dibuat dan disimpan!")
             st.session_state.lkpd_data = load_lkpd() 
         else:
@@ -173,6 +172,7 @@ def guru_page():
     else:
         st.info("Silakan masukkan tema dan klik 'Generate LKPD' untuk memulai.")
 
+# --- Tampilan Halaman Guru: Penilaian Siswa ---
 def guru_jawaban_page():
     st.title("📚 Dashboard Guru: Hasil Jawaban Siswa")
 
@@ -180,7 +180,7 @@ def guru_jawaban_page():
     all_jawaban = load_all_jawaban()
     
     # Filter data hanya untuk jawaban (bukan LKPD asli)
-    jawaban_siswa = [item for item in all_jawaban if item['user_id'] != 'LKPD']
+    jawaban_siswa = [item for item in all_jawaban if item['user_id'].startswith('Siswa_')]
     
     if not jawaban_siswa:
         st.warning("Belum ada jawaban siswa yang tersimpan.")
@@ -189,12 +189,17 @@ def guru_jawaban_page():
     # 2. Tampilkan Ringkasan dalam DataFrame
     data_summary = []
     for item in jawaban_siswa:
+        
+        # Hitung skor total dan status penilaian
+        total_score = sum(j.get('score', 0) if isinstance(j.get('score'), int) else 0 for j in item['jawaban_siswa'])
+        dinilai_count = sum(1 for j in item['jawaban_siswa'] if isinstance(j.get('score'), int) and j.get('score') >= 0)
+        
         data_summary.append({
             "Siswa": item['user_id'].replace('Siswa_', ''),
             "Tanggal": item['timestamp'].strftime("%Y-%m-%d %H:%M"),
             "Jumlah Soal": len(item['jawaban_siswa']),
-            "Sudah Dinilai": sum(1 for j in item['jawaban_siswa'] if 'score' in j and j.get('score') != 'Belum Dinilai'),
-            "Skor Total": sum(j.get('score', 0) if isinstance(j.get('score'), int) else 0 for j in item['jawaban_siswa'])
+            "Sudah Dinilai": f"{dinilai_count}/{len(item['jawaban_siswa'])}",
+            "Skor Total": total_score
         })
     
     df = pd.DataFrame(data_summary)
@@ -207,18 +212,17 @@ def guru_jawaban_page():
     st.subheader("Proses Penilaian Jawaban")
 
     if st.button("✨ Nilai Semua Jawaban Siswa"):
-        if not AI_READY: # Menggunakan AI_READY status
+        if not AI_READY: 
             st.error("Koneksi Gemini AI belum siap. Mohon cek status di sidebar.")
             return
 
         with st.spinner("AI sedang menilai semua jawaban siswa... Proses ini mungkin memakan waktu."):
             try:
                 # Memanggil fungsi scoring
-                results = score_all_jawaban(jawaban_siswa) 
+                score_all_jawaban(jawaban_siswa) 
                 
-                # Tampilkan hasil penilaian
-                st.success("Penilaian Selesai!")
-                # Force rerun to update detail view below
+                # Tampilkan hasil penilaian dan force rerun
+                st.success("Penilaian Selesai! Nilai di bawah telah diupdate.")
                 st.rerun()
 
             except Exception as e:
@@ -240,8 +244,8 @@ def guru_jawaban_page():
     
     if selected_user:
         # Muat ulang data siswa secara spesifik
-        detail_data = load_all_jawaban(user_id=selected_user)
-        detail_data = detail_data[0] if detail_data else None
+        detail_data_list = load_all_jawaban(user_id=selected_user)
+        detail_data = detail_data_list[0] if detail_data_list else None
 
         if detail_data:
             st.markdown(f"#### Hasil untuk {selected_user.replace('Siswa_', '')} (LKPD: {detail_data.get('lkpd_title', 'Tanpa Judul')})")
@@ -257,7 +261,7 @@ def guru_jawaban_page():
                     st.markdown(f"**Nilai:** **{score}** / 100")
                     st.markdown(f"**Feedback AI:** {feedback}")
                     
-# --- Tampilan Halaman Siswa ---
+# --- Tampilan Halaman Siswa: Pengisian Jawaban ---
 
 def siswa_page():
     st.title(f"🧑‍🎓 Halaman Siswa: {st.session_state.current_user.replace('Siswa_', '')}")
@@ -277,8 +281,6 @@ def siswa_page():
     
     st.markdown("---")
     
-    # 2. Formulir Jawaban Siswa
-    
     # Memuat jawaban yang sudah ada untuk pengguna ini (jika ada)
     all_jawaban_user = load_all_jawaban(user_id=st.session_state.current_user)
     current_jawaban = next((item for item in all_jawaban_user if item['user_id'] == st.session_state.current_user), None)
@@ -289,8 +291,10 @@ def siswa_page():
     # Inisialisasi/Update daftar jawaban siswa untuk formulir
     if not st.session_state.siswa_answers or len(st.session_state.siswa_answers) != total_questions:
         if current_jawaban:
+            # Gunakan jawaban yang sudah tersimpan
             st.session_state.siswa_answers = [j['jawaban'] for j in current_jawaban['jawaban_siswa']]
         else:
+            # Inisialisasi jawaban kosong
             st.session_state.siswa_answers = [""] * total_questions
     
     
@@ -327,7 +331,7 @@ def siswa_page():
             for idx, q_text in enumerate(all_questions):
                 answer = st.session_state.get(f"answer_{idx}", "") 
                 
-                # Cari skor dan feedback yang sudah ada
+                # Memastikan skor dan feedback sebelumnya dipertahankan saat menyimpan
                 existing_score = 'Belum Dinilai'
                 existing_feedback = 'Belum Dinilai'
                 if current_jawaban and idx < len(current_jawaban['jawaban_siswa']):
@@ -345,6 +349,7 @@ def siswa_page():
             st.success("Jawaban Anda berhasil disimpan! Silakan cek menu 'Lihat Nilai/Feedback' secara berkala.")
             st.session_state.siswa_answers = [d['jawaban'] for d in siswa_data] # Update state
 
+# --- Tampilan Halaman Siswa: Melihat Nilai ---
 def siswa_nilai_page():
     st.title(f"💯 Hasil Penilaian LKPD")
 
@@ -357,10 +362,13 @@ def siswa_nilai_page():
 
     st.info(f"LKPD: **{current_jawaban.get('lkpd_title', 'Tanpa Judul')}** | Disimpan pada: **{current_jawaban['timestamp'].strftime('%d %B %Y %H:%M')}**")
     
-    total_score = sum(j.get('score', 0) if isinstance(j.get('score'), int) else 0 for j in current_jawaban['jawaban_siswa'])
     total_questions = len(current_jawaban['jawaban_siswa'])
     
-    st.markdown(f"## Skor Total Anda: **{total_score}** / {total_questions * 100}")
+    # Hitung skor yang sudah dinilai (hanya yang bertipe integer)
+    scores_list = [j.get('score', 0) for j in current_jawaban['jawaban_siswa'] if isinstance(j.get('score'), int)]
+    total_score = sum(scores_list)
+    
+    st.markdown(f"## Skor Total Anda: **{total_score}** / {total_questions * 100} (dari {len(scores_list)} soal yang sudah dinilai)")
     st.divider()
     
     for i, j in enumerate(current_jawaban['jawaban_siswa']):

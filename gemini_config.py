@@ -6,251 +6,250 @@ import uuid
 from datetime import datetime
 import logging
 from typing import Optional, Dict, Any, List
+import re # Diperlukan untuk ekstraksi JSON yang lebih robust
 
-# ========== LOGGING SETUP ==========
-logging.basicConfig(level=logging.INFO)
+# --- Konfigurasi dan Logger ---
+# Inisialisasi logger untuk debugging
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
-# ========== CONSTANTS & SECRETS ==========
-LKPD_DIR = "lkpd_outputs"
-JAWABAN_DIR = "jawaban_siswa"
-# Ambil dari Streamlit Secrets, aman untuk deployment
-API_KEY = st.secrets.get("GEMINI_API_KEY", None) 
-MODEL_NAME = "gemini-2.5-flash"
+# Variabel global untuk instance
+_model = None
+_db = None
 
-# ========== GLOBAL VARIABLES ==========
-_model: Optional[genai.GenerativeModel] = None
-_init_success: bool = False
+# --- Inisialisasi Gemini API dan Database (Firestore Mock) ---
 
-# ========== UTILITY FUNCTIONS ==========
-def ensure_directories() -> None:
-    """Create all required directories (important for Streamlit Cloud storage)"""
-    os.makedirs(LKPD_DIR, exist_ok=True)
-    os.makedirs(JAWABAN_DIR, exist_ok=True)
-    logger.info("✅ Directories created: lkpd_outputs, jawaban_siswa")
-
-def validate_api_key() -> bool:
-    """Validate GEMINI_API_KEY exists"""
-    if not API_KEY:
-        st.sidebar.error("❌ **GEMINI_API_KEY** tidak ditemukan di Secrets.")
-        logger.error("API Key missing")
-        return False
-    return True
-
-# ========== GEMINI INITIALIZATION (PERBAIKAN KRUSIAL ANTI-BLOKIR) ==========
-@st.cache_resource
-def init_gemini() -> Optional[genai.GenerativeModel]:
-    """Initialize Gemini model without an immediate test call to save quota."""
-    global _model, _init_success
+# Fungsi yang di-cache untuk inisialisasi satu kali
+@st.cache_resource(show_spinner=False)
+def init_gemini():
+    """Menginisialisasi Model Gemini dan Mock Database."""
+    global _model, _db
     
-    if _init_success and _model:
-        return _model
+    # Dapatkan API Key dari secrets Streamlit
+    # Gunakan variabel kosong jika tidak ada secret (asumsi environment akan menyediakannya)
+    API_KEY = st.secrets.get("GEMINI_API_KEY", "") 
     
-    if not validate_api_key():
-        return None
-        
+    # Jika API_KEY kosong, setelannya akan ditangani oleh genai.Client
     try:
-        genai.configure(api_key=API_KEY)
-        _model = genai.GenerativeModel(MODEL_NAME)
+        # Inisialisasi Model Gemini
+        # Model defaultnya adalah gemini-2.5-flash
+        _model = genai.Client(api_key=API_KEY).models
         
-        # PANGGILAN generate_content("Test") TELAH DIHAPUS.
+        # Mock Database: Menggunakan session_state sebagai pengganti Firestore
+        if 'mock_db' not in st.session_state:
+            # Struktur mock_db: 
+            # { user_id: { 'jawaban_siswa': [], 'timestamp': datetime, 'lkpd_title': str } }
+            st.session_state.mock_db = {} 
+        _db = st.session_state.mock_db
         
-        logger.info(f"✅ Gemini {MODEL_NAME} initialized successfully!")
-        _init_success = True
-        st.sidebar.success(f"🤖 **Gemini {MODEL_NAME} READY**")
-        return _model
+        logger.info("✅ Gemini AI and Mock DB initialized.")
+        st.sidebar.success("🤖 Gemini gemini-2.5-flash READY")
+        return _db, _model
+        
     except Exception as e:
-        error_msg = f"❌ Gemini Init Error: {str(e)}"
-        st.sidebar.error(error_msg)
-        logger.error(error_msg)
-        _model = None
-        _init_success = False
-        return None
+        st.sidebar.error(f"Error in init_gemini: {e}")
+        logger.error(f"Initialization failed: {e}")
+        return None, None
 
-# ... [Fungsi load_lkpd dan Jawaban Management tidak berubah] ...
-def load_lkpd(lkpd_id: str) -> Optional[Dict[str, Any]]:
-    filepath = os.path.join(LKPD_DIR, f"{lkpd_id}.json")
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            return data
-        except Exception as e:
-            logger.error(f"Load LKPD error: {e}")
+# --- Operasi Database (Mock Firestore) ---
+
+def load_lkpd() -> Optional[Dict[str, Any]]:
+    """Memuat LKPD yang terakhir disimpan (dengan user_id='LKPD')."""
+    if _db and 'LKPD' in _db:
+        # LKPD data disimpan di 'jawaban_siswa' untuk konsistensi struktur
+        return _db['LKPD'].get('jawaban_siswa') 
     return None
 
-def save_jawaban_siswa(lkpd_id: str, nama_siswa: str, jawaban_data: Dict[str, Any]) -> str:
-    try:
-        clean_nama = "".join(c if c.isalnum() or c.isspace() else '_' for c in nama_siswa).strip().replace(' ', '_')
-        unique_id = uuid.uuid4().hex[:6]
-        filename = f"{lkpd_id}_{clean_nama}_{unique_id}.json"
-        filepath = os.path.join(JAWABAN_DIR, filename)
+def save_jawaban_siswa(user_id: str, data: Any, lkpd_title: str = "LKPD Terbaru"):
+    """Menyimpan data LKPD atau jawaban siswa ke mock database."""
+    if not _db:
+        logger.error("Database not initialized.")
+        return
         
-        full_data = {
-            **jawaban_data,
-            'lkpd_id': lkpd_id,
-            'nama_siswa': nama_siswa,
-            'waktu_submit': datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-            'total_score': 0, # Nilai awal 0
-            'feedback': "",
-            'strengths': [],
-            'improvements': []
-        }
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(full_data, f, ensure_ascii=False, indent=2)
-        logger.info(f"📝 Jawaban saved: {nama_siswa} - {lkpd_id}")
-        return filename
-    except Exception as e:
-        logger.error(f"Jawaban save error: {e}")
-        return ""
+    _db[user_id] = {
+        'user_id': user_id,
+        'lkpd_title': lkpd_title,
+        'jawaban_siswa': data,
+        'timestamp': datetime.now()
+    }
+    logger.info(f"Data saved for user_id: {user_id}")
 
-def load_all_jawaban(lkpd_id: str) -> List[Dict[str, Any]]:
-    jawaban_files = [f for f in os.listdir(JAWABAN_DIR) if f.startswith(lkpd_id) and f.endswith('.json')]
-    all_jawaban = []
-    for filename in jawaban_files:
-        filepath = os.path.join(JAWABAN_DIR, filename)
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                data['filename'] = filename # Sisipkan filename untuk update skor nanti
-                all_jawaban.append(data)
-        except Exception as e:
-            logger.error(f"Load jawaban error {filename}: {e}")
-    return all_jawaban
-
-# ========== AI GENERATION (LKPD) & SCORING ==========
-@st.cache_data(show_spinner=False)
-def generate_lkpd(theme: str) -> Optional[Dict[str, Any]]:
-    # ... [Logika generate_lkpd tidak berubah, dipanggil oleh app.py] ...
-    if not _model: return None
+def load_all_jawaban(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Memuat semua atau spesifik jawaban dari mock database."""
+    if not _db:
+        return []
     
-    prompt = f"""
-    Buat LKPD INTERAKTIF untuk tema "{theme}" SMP/SMA.
-    **OUTPUT HANYA JSON VALID** (tanpa markdown/kode):
-    {{...}} 
-    """ # Isi prompt di sini
+    if user_id:
+        # Load spesifik jawaban
+        return [_db.get(user_id)] if user_id in _db else []
+    else:
+        # Load semua jawaban
+        return list(_db.values())
 
+# --- Fungsi Generasi Konten AI (LKPD) ---
+
+def generate_lkpd(theme: str) -> Optional[Dict[str, Any]]:
+    """Meminta AI untuk membuat LKPD baru dan mengembalikan JSON yang divalidasi."""
+    if not _model: return None
+
+    # Prompt yang diperkuat untuk memaksa format JSON
+    prompt = f"""
+    Anda adalah pakar kurikulum dan perancang LKPD (Lembar Kerja Peserta Didik).
+    Buat LKPD INTERAKTIF untuk tema "{theme}" SMP/SMA.
+    
+    **OUTPUT HANYA JSON VALID** (Tanpa Markdown/backtick, tanpa penjelasan di luar JSON).
+    
+    Pastikan JSON mengandung SEMUA kunci wajib berikut: 'judul', 'tujuan_pembelajaran', 'materi_singkat', dan 'kegiatan'.
+    
+    Format JSON harus:
+    {{
+      "judul": "Judul LKPD yang menarik dan sesuai tema",
+      "tujuan_pembelajaran": ["Tujuan 1", "Tujuan 2", "Daftar tujuan pembelajaran yang relevan"],
+      "materi_singkat": "Ringkasan materi 2-3 paragraf.",
+      "kegiatan": [
+        {{
+          "nama": "Nama Kegiatan 1 (Misal: Eksplorasi Konsep)",
+          "petunjuk": "Petunjuk jelas untuk siswa...",
+          "tugas_interaktif": ["Instruksi tugas 1", "Instruksi tugas 2"],
+          "pertanyaan_pemantik": [
+            {{"pertanyaan": "Pertanyaan wajib 1 terkait konsep utama"}},
+            {{"pertanyaan": "Pertanyaan wajib 2 yang membutuhkan analisis"}}
+          ]
+        }}
+        // Tambahkan kegiatan lain jika diperlukan
+      ]
+    }}
+    """
+    
     try:
-        response = _model.generate_content(prompt)
-        json_str = response.text.strip().replace("```json", "").replace("```", "").strip()
-        data = json.loads(json_str)
+        # Menggunakan gemini-2.5-flash untuk kecepatan
+        response = _model.generate_content(
+            model="gemini-2.5-flash", 
+            contents=prompt
+        )
         
+        # 1. Agresif mencari blok JSON dalam respons (robustness check KRITIS)
+        try:
+            # Mencoba decode langsung
+            data = json.loads(response.text.strip())
+        except json.JSONDecodeError:
+            # Jika gagal, coba ekstrak konten antara tanda kurung kurawal
+            json_str_match = re.search(r'\{.*\}', response.text.strip(), re.DOTALL)
+            if json_str_match:
+                json_str = json_str_match.group(0)
+                # Hilangkan backtick markdown jika ada
+                json_str = json_str.strip('`').strip()
+                data = json.loads(json_str)
+            else:
+                # Gagal total, lempar error yang lebih jelas
+                raise json.JSONDecodeError("Failed to find JSON block in AI response", response.text, 0)
+        
+        # 2. Safety Check (Validasi Kunci Wajib)
         required_keys = ['judul', 'tujuan_pembelajaran', 'materi_singkat', 'kegiatan']
         if not all(key in data for key in required_keys):
-            raise ValueError("Missing required keys in JSON")
+            raise ValueError(f"Missing required keys in final JSON structure. Required: {required_keys}")
         
         logger.info(f"✅ LKPD generated for theme: {theme}")
         return data
-    except json.JSONDecodeError as e:
-        st.error(f"❌ JSON Error - AI response tidak valid: {e}")
-        logger.error(f"JSON decode error: {e}")
-        return None
+        
     except Exception as e:
-        st.error(f"❌ AI Error: {str(e)}")
-        logger.error(f"Generate error: {e}")
+        logger.error(f"Generate LKPD error: {e}")
+        # Tangkap dan tampilkan error yang ditangkap oleh try/except di app.py
+        st.error(f"❌ AI Error: Gagal mendapatkan LKPD dari AI. Detail: {e}")
         return None
 
+# --- Fungsi Penilaian AI ---
+
 def score_jawaban(jawaban_text: str, pertanyaan: str) -> Dict[str, Any]:
-    """AI Auto-Scoring for student answer"""
-    if not _model:
-        return {"score": 0, "feedback": "Model tidak tersedia"}
-    
+    """Meminta AI untuk menilai satu jawaban dan memberikan feedback."""
+    if not _model: return {"score": 0, "feedback": "AI Not Ready"}
+
     prompt = f"""
-    **NILAI JAWABAN SISWA** (skala 0-100) berdasarkan kriteria: Pemahaman konsep (40%), Kejelasan jawaban (30%), Contoh/referensi (20%), Bahasa (10%):
+    Anda adalah penilai ahli. Berikan nilai 0-100 untuk 'Jawaban Siswa' berdasarkan 'Pertanyaan' dan berikan 'feedback' singkat.
     
-    Pertanyaan: "{pertanyaan}"
-    Jawaban: "{jawaban_text}"
+    Pertanyaan: {pertanyaan}
+    Jawaban Siswa: {jawaban_text}
     
-    **OUTPUT HANYA JSON VALID** (tanpa markdown/kode):
-    {{
-      "score": 85,
-      "feedback": "Feedback positif + saran (50 kata max)",
-      "strengths": ["Kelebihan 1", "Kelebihan 2"],
-      "improvements": ["Perbaikan 1", "Perbaikan 2"]
-    }}
+    Hanya hasilkan **JSON VALID** dengan kunci 'score' (int 0-100) dan 'feedback' (string). Jangan ada teks tambahan.
+    Contoh: {{"score": 85, "feedback": "Jawaban Anda sangat lengkap dan relevan..."}}
     """
+    
     try:
-        response = _model.generate_content(prompt)
-        json_str = response.text.strip().replace("```json", "").replace("```", "").strip()
-        score_data = json.loads(json_str)
+        response = _model.generate_content(
+            model="gemini-2.5-flash", 
+            contents=prompt
+        )
         
-        # Validasi skor harus berupa integer/float
-        score_value = int(score_data.get('score', 0))
+        # LOGIKA JSON EXTRACTION BARU (Robustness Check KRITIS)
+        try:
+            score_data = json.loads(response.text.strip())
+        except json.JSONDecodeError:
+            json_str_match = re.search(r'\{.*\}', response.text.strip(), re.DOTALL)
+            if json_str_match:
+                json_str = json_str_match.group(0)
+                # Hilangkan backtick markdown jika ada
+                json_str = json_str.strip('`').strip()
+                score_data = json.loads(json_str)
+            else:
+                raise json.JSONDecodeError("Failed to find JSON block in AI response", response.text, 0)
+        
+        # Validasi skor harus berupa integer
+        try:
+            score_value = int(score_data.get('score', 0))
+        except ValueError:
+            score_value = 0 # Jika skor bukan angka, set ke 0
+            
         score_data['score'] = score_value
         
+        # Pastikan feedback ada
+        if 'feedback' not in score_data:
+            score_data['feedback'] = "Feedback tidak tersedia dari AI."
+            
         logger.info(f"📊 Scored: {score_value}")
         return score_data
     except Exception as e:
-        logger.error(f"Scoring error: {e}")
+        logger.error(f"Scoring error for: {jawaban_text[:30]}... Detail: {e}")
         return {
             "score": 0,
-            "feedback": "Error dalam penilaian atau format JSON AI tidak valid.",
-            "strengths": [],
-            "improvements": ["Perlu perbaikan format output AI"]
+            "feedback": f"Gagal mendapatkan penilaian AI karena error format: {e}"
         }
 
-# ========== BULK SCORING (LOGIC UPDATE) ==========
-def score_all_jawaban(lkpd_id: str) -> bool:
-    """Score all student answers for LKPD and save the results."""
-    all_jawaban = load_all_jawaban(lkpd_id)
-    if not all_jawaban:
-        logger.info(f"No answers found for scoring LKPD {lkpd_id}")
-        return False
-
-    success_count = 0
+def score_all_jawaban(all_jawaban: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Menilai semua jawaban siswa yang belum dinilai secara berurutan dan menyimpan hasilnya."""
+    if not _db: return []
     
-    for jawaban in all_jawaban:
-        total_score_sum = 0
-        num_questions = 0
-        all_feedback = []
-        all_strengths = []
-        all_improvements = []
+    results = []
+    
+    for item in all_jawaban:
+        user_id = item['user_id']
+        jawaban_siswa = item['jawaban_siswa']
         
-        for pertanyaan, answer_text in jawaban['jawaban'].items():
-            if answer_text and answer_text.strip():
-                score_result = score_jawaban(answer_text, pertanyaan)
-                total_score_sum += score_result.get('score', 0)
-                num_questions += 1
+        updated_jawaban = []
+        is_updated = False
+        
+        for j in jawaban_siswa:
+            # Hanya proses yang belum dinilai (score 0 atau 'Belum Dinilai' dari load)
+            if 'score' not in j or j.get('score') == 0 or j.get('score') == "Belum Dinilai": 
                 
-                all_feedback.append(score_result.get('feedback', ''))
-                all_strengths.extend(score_result.get('strengths', []))
-                all_improvements.extend(score_result.get('improvements', []))
-        
-        final_score = total_score_sum // num_questions if num_questions > 0 else 0
-        
-        # UPDATE DATA JAWABAN
-        jawaban['total_score'] = final_score
-        jawaban['feedback'] = " | ".join(filter(None, all_feedback))
-        jawaban['strengths'] = list(set(all_strengths))[:3]
-        jawaban['improvements'] = list(set(all_improvements))[:3]
-        
-        # SIMPAN ULANG FILE JAWABAN DENGAN SKOR TERBARU
-        filename_to_update = jawaban.pop('filename', None) 
-        if filename_to_update:
-            filepath = os.path.join(JAWABAN_DIR, filename_to_update)
-            try:
-                # Ambil data yang sudah diupdate
-                data_to_save = {k: v for k, v in jawaban.items() if k != 'filename'}
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    json.dump(data_to_save, f, ensure_ascii=False, indent=2)
-                logger.info(f"💾 Score saved for {jawaban['nama_siswa']}")
-                success_count += 1
-            except Exception as e:
-                logger.error(f"Error saving score for {filename_to_update}: {e}")
+                # Panggil AI untuk menilai
+                scoring_result = score_jawaban(j['jawaban'], j['pertanyaan'])
                 
-    return success_count > 0
+                # Update data jawaban dengan hasil scoring
+                j['score'] = scoring_result['score']
+                j['feedback'] = scoring_result['feedback']
+                is_updated = True
+            
+            updated_jawaban.append(j)
 
-# ========== INITIALIZATION & GLOBAL ACCESSOR ==========
-def initialize_app():
-    ensure_directories()
-    model = init_gemini()
-    return model is not None
+        if is_updated:
+            # Simpan data yang telah dinilai kembali ke mock database
+            save_jawaban_siswa(user_id, updated_jawaban, item['lkpd_title'])
+            
+        results.append({
+            "Siswa": user_id.replace('Siswa_', ''),
+            "Jumlah Soal": len(updated_jawaban),
+            "Skor Total": sum(j.get('score', 0) for j in updated_jawaban),
+            "Status": "Dinilai Ulang" if is_updated else "Sudah Dinilai"
+        })
 
-def get_model() -> Optional[genai.GenerativeModel]:
-    global _model
-    if _model is None:
-        initialize_app()
-    return _model
-
-# Auto-init on import
-initialize_app()
+    return results

@@ -27,13 +27,17 @@ if 'lkpd_theme' not in st.session_state:
     st.session_state.lkpd_theme = ""
 if 'current_user' not in st.session_state:
     st.session_state.current_user = "Guru" # Default pengguna
+if 'siswa_answers' not in st.session_state:
+    st.session_state.siswa_answers = [] # Inisialisasi daftar jawaban siswa
 
 # --- Inisialisasi Model AI dan Database ---
-db, _ = init_gemini()
+# init_gemini sekarang mengembalikan status boolean
+db_ready = init_gemini()
+db = st.session_state.get('mock_db', None) # Ambil db dari session state
 
 # Tampilkan status koneksi di sidebar
 st.sidebar.markdown(f"**Status Koneksi:**")
-if db:
+if db_ready:
     st.sidebar.success("Database & Gemini AI Ready!")
 else:
     st.sidebar.error("Database/Gemini AI Not Ready.")
@@ -45,6 +49,10 @@ st.sidebar.divider()
 # --- Fungsi Pindah Halaman ---
 def set_page(page_name):
     st.session_state.page = page_name
+    # Pastikan data jawaban siswa direset atau dimuat ulang saat pindah ke halaman siswa
+    if page_name == 'siswa':
+        # Reset siswa_answers state agar dimuat ulang di siswa_page
+        st.session_state.siswa_answers = [] 
 
 # --- Sidebar Navigasi ---
 st.sidebar.header("Navigasi")
@@ -91,7 +99,7 @@ def guru_page():
     
     # 2. Tombol Generate LKPD
     if col2.button("🚀 Generate LKPD", use_container_width=True):
-        if not db:
+        if not db_ready: # Menggunakan db_ready status
             st.error("Koneksi Gemini/Database belum siap. Mohon cek status di sidebar.")
             return
 
@@ -103,6 +111,8 @@ def guru_page():
             st.session_state.lkpd_data = new_lkpd
             save_jawaban_siswa("LKPD", new_lkpd) # Simpan LKPD ke DB
             st.success("LKPD berhasil dibuat dan disimpan!")
+            # Muat ulang LKPD dari DB untuk sinkronisasi
+            st.session_state.lkpd_data = load_lkpd() 
         else:
             st.error("Gagal mendapatkan LKPD dari AI. Cek log atau coba tema lain.")
             st.session_state.lkpd_data = None
@@ -164,8 +174,8 @@ def guru_jawaban_page():
             "Siswa": item['user_id'].replace('Siswa_', ''),
             "Tanggal": item['timestamp'].strftime("%Y-%m-%d %H:%M"),
             "Jumlah Soal": len(item['jawaban_siswa']),
-            "Sudah Dinilai": sum(1 for j in item['jawaban_siswa'] if 'score' in j),
-            "Skor Total": sum(j.get('score', 0) for j in item['jawaban_siswa'])
+            "Sudah Dinilai": sum(1 for j in item['jawaban_siswa'] if 'score' in j and j.get('score') != 'Belum Dinilai'),
+            "Skor Total": sum(j.get('score', 0) if isinstance(j.get('score'), int) else 0 for j in item['jawaban_siswa'])
         })
     
     df = pd.DataFrame(data_summary)
@@ -178,7 +188,7 @@ def guru_jawaban_page():
     st.subheader("Proses Penilaian Jawaban")
 
     if st.button("✨ Nilai Semua Jawaban Siswa"):
-        if not db:
+        if not db_ready: # Menggunakan db_ready status
             st.error("Koneksi Gemini/Database belum siap.")
             return
 
@@ -189,7 +199,23 @@ def guru_jawaban_page():
                 
                 # Tampilkan hasil penilaian
                 st.success("Penilaian Selesai!")
-                st.dataframe(pd.DataFrame(results), use_container_width=True)
+                # Tampilkan ringkasan penilaian yang diperbarui
+                updated_summary = []
+                for res in results:
+                    # Cari item asli untuk mendapatkan total skor
+                    item = next((i for i in load_all_jawaban() if i['user_id'] == f"Siswa_{res['Siswa']}"), None)
+                    if item:
+                        total_score = sum(j.get('score', 0) if isinstance(j.get('score'), int) else 0 for j in item['jawaban_siswa'])
+                        updated_summary.append({
+                            "Siswa": res['Siswa'],
+                            "Jumlah Soal": res['Jumlah Soal'],
+                            "Skor Total Baru": total_score,
+                            "Status": res['Status']
+                        })
+                
+                st.dataframe(pd.DataFrame(updated_summary), use_container_width=True)
+                # Force rerun to update detail view below
+                st.rerun()
 
             except Exception as e:
                 st.error(f"Gagal saat proses penilaian massal: {e}")
@@ -200,13 +226,21 @@ def guru_jawaban_page():
     # 4. Detail Jawaban Siswa
     st.subheader("Detail Jawaban Siswa")
     
+    siswa_ids = [item['user_id'] for item in jawaban_siswa]
+    if not siswa_ids:
+        st.warning("Tidak ada data siswa untuk ditampilkan.")
+        return
+
     selected_user = st.selectbox(
         "Pilih Siswa untuk melihat detail:",
-        options=[item['user_id'] for item in jawaban_siswa]
+        options=siswa_ids
     )
     
     if selected_user:
-        detail_data = next((item for item in jawaban_siswa if item['user_id'] == selected_user), None)
+        # Muat ulang data siswa secara spesifik
+        detail_data = load_all_jawaban(user_id=selected_user)
+        detail_data = detail_data[0] if detail_data else None
+
         if detail_data:
             st.markdown(f"#### Hasil untuk {selected_user.replace('Siswa_', '')} (LKPD: {detail_data.get('lkpd_title', 'Tanpa Judul')})")
             
@@ -227,8 +261,9 @@ def siswa_page():
     st.title(f"🧑‍🎓 Halaman Siswa: {st.session_state.current_user.replace('Siswa_', '')}")
     
     # 1. Load LKPD terbaru (yang sudah di-generate Guru)
-    lkpd = st.session_state.lkpd_data
-    
+    lkpd = load_lkpd() 
+    st.session_state.lkpd_data = lkpd
+
     if not lkpd:
         st.warning("LKPD belum tersedia. Mohon Guru membuat LKPD terlebih dahulu.")
         return
@@ -249,14 +284,11 @@ def siswa_page():
     all_jawaban_user = load_all_jawaban(user_id=st.session_state.current_user)
     current_jawaban = next((item for item in all_jawaban_user if item['user_id'] == st.session_state.current_user), None)
     
-    # Inisialisasi daftar jawaban siswa untuk formulir
-    if 'siswa_answers' not in st.session_state:
-        # Jika ada jawaban tersimpan, gunakan itu. Jika tidak, buat struktur kosong.
+    # Inisialisasi/Update daftar jawaban siswa untuk formulir
+    if not st.session_state.siswa_answers or len(st.session_state.siswa_answers) == 0:
         if current_jawaban:
-             # Menggunakan jawaban yang tersimpan
             st.session_state.siswa_answers = [j['jawaban'] for j in current_jawaban['jawaban_siswa']]
         else:
-            # Struktur jawaban kosong berdasarkan jumlah pertanyaan di LKPD
             total_questions = sum(len(kegiatan.get('pertanyaan_pemantik', [])) for kegiatan in lkpd.get('kegiatan', []))
             st.session_state.siswa_answers = [""] * total_questions
         
@@ -277,10 +309,13 @@ def siswa_page():
                 # Tambahkan pertanyaan ke daftar global untuk saving
                 all_questions.append(pertanyaan_text) 
                 
+                # Pastikan indeks ada di st.session_state.siswa_answers
+                current_answer = st.session_state.siswa_answers[q_idx] if q_idx < len(st.session_state.siswa_answers) else ""
+
                 # Tampilkan area teks untuk jawaban
                 st.text_area(
                     label=f"**{q_idx+1}.** {pertanyaan_text}",
-                    value=st.session_state.siswa_answers[q_idx],
+                    value=current_answer,
                     key=f"answer_{q_idx}",
                     help="Jawab pertanyaan ini di sini."
                 )
@@ -288,22 +323,31 @@ def siswa_page():
                 
         # 3. Tombol Simpan Jawaban
         if st.button("💾 Simpan Jawaban", type="primary"):
-            if not db:
+            if not db_ready:
                 st.error("Koneksi database tidak tersedia.")
                 return
             
             # Kumpulkan jawaban dari state form
             siswa_data = []
             for idx, q_text in enumerate(all_questions):
+                # Ambil jawaban terbaru dari key Streamlit
+                answer = st.session_state.get(f"answer_{idx}", "") 
+                
+                # Gabungkan dengan data skor/feedback jika sudah ada
+                existing_score = current_jawaban['jawaban_siswa'][idx].get('score', 'Belum Dinilai') if current_jawaban and idx < len(current_jawaban['jawaban_siswa']) else 'Belum Dinilai'
+                existing_feedback = current_jawaban['jawaban_siswa'][idx].get('feedback', 'Belum Dinilai') if current_jawaban and idx < len(current_jawaban['jawaban_siswa']) else 'Belum Dinilai'
+
                 siswa_data.append({
                     "pertanyaan": q_text,
-                    "jawaban": st.session_state[f"answer_{idx}"]
+                    "jawaban": answer,
+                    "score": existing_score,
+                    "feedback": existing_feedback
                 })
             
             # Simpan ke database
             save_jawaban_siswa(st.session_state.current_user, siswa_data, lkpd.get('judul', 'LKPD Tanpa Judul'))
             st.success("Jawaban Anda berhasil disimpan!")
-            st.session_state.siswa_answers = [d['jawaban'] for d in siswa_data] # Update state for next load
+            st.session_state.siswa_answers = [d['jawaban'] for d in siswa_data] # Update state
 
 def siswa_nilai_page():
     st.title(f"💯 Hasil Penilaian LKPD")
@@ -318,7 +362,7 @@ def siswa_nilai_page():
 
     st.info(f"LKPD: **{current_jawaban.get('lkpd_title', 'Tanpa Judul')}** | Disimpan pada: **{current_jawaban['timestamp'].strftime('%d %B %Y %H:%M')}**")
     
-    total_score = sum(j.get('score', 0) for j in current_jawaban['jawaban_siswa'])
+    total_score = sum(j.get('score', 0) if isinstance(j.get('score'), int) else 0 for j in current_jawaban['jawaban_siswa'])
     total_questions = len(current_jawaban['jawaban_siswa'])
     
     st.markdown(f"## Skor Total Anda: **{total_score}** / {total_questions * 100}")
@@ -329,18 +373,20 @@ def siswa_nilai_page():
         score = j.get('score', 'Belum Dinilai')
         feedback = j.get('feedback', 'Belum Dinilai')
         
-        container_color = "success" if isinstance(score, int) and score >= 50 else "warning" if isinstance(score, int) else "info"
-
+        # Penanganan display untuk skor dan feedback
+        score_display = score if isinstance(score, int) else 'Belum Dinilai'
+        feedback_display = feedback if feedback != 'Belum Dinilai' else "Nilai dan Feedback AI akan muncul di sini setelah Guru memproses penilaian."
+        
         with st.container(border=True):
             st.markdown(f"**Pertanyaan {i+1}:** {j['pertanyaan']}")
             st.markdown(f"**Jawaban Anda:** {j['jawaban']}")
             st.markdown("---")
             
-            if score == 'Belum Dinilai':
-                st.info("Nilai dan Feedback AI akan muncul di sini setelah Guru memproses penilaian.")
+            if score_display == 'Belum Dinilai':
+                 st.info(feedback_display)
             else:
-                st.markdown(f"**Nilai AI:** <span style='font-size: 1.5em; font-weight: bold;'>{score} / 100</span>", unsafe_allow_html=True)
-                st.markdown(f"**Feedback AI:** {feedback}")
+                st.markdown(f"**Nilai AI:** <span style='font-size: 1.5em; font-weight: bold;'>{score_display} / 100</span>", unsafe_allow_html=True)
+                st.markdown(f"**Feedback AI:** {feedback_display}")
         
     st.divider()
 

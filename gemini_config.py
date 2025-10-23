@@ -2,7 +2,7 @@ import os
 import json
 import uuid
 import logging
-import re 
+import re
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -15,14 +15,15 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # --- Inisialisasi Gemini API dan Database (Firestore Mock) ---
+AI_READY = False  # Global variable to track initialization status
 
 @st.cache_resource(show_spinner=False)
 def init_gemini() -> bool:
     """
-    Menginisialisasi Konfigurasi Gemini dengan 3 lapis otentikasi (Manual > Secrets > Env). 
-    Mengembalikan status bool koneksi AI/DB.
+    Menginisialisasi Konfigurasi Gemini dengan 3 lapis otentikasi (Manual > Secrets > Env).
+    Mengembalikan status bool koneksi AI/DB dan mengatur AI_READY.
     """
-    
+    global AI_READY
     # 1. Lapis Pertama: Input Manual dari Sidebar (dari app.py)
     API_KEY = st.session_state.get('manual_api_key', '')
     
@@ -37,6 +38,7 @@ def init_gemini() -> bool:
     # Final Check
     if not API_KEY:
         st.sidebar.error("❌ Kunci API Gemini tidak ditemukan di mana pun (Secrets/Env/Input).")
+        AI_READY = False
         return False
     
     try:
@@ -48,13 +50,15 @@ def init_gemini() -> bool:
             st.session_state.mock_db = {} 
         
         logger.info("✅ Gemini AI and Mock DB initialized.")
-        return True # Berhasil
+        AI_READY = True
+        return True  # Berhasil
         
     except Exception as e:
         # Jika konfigurasi gagal (biasanya karena kunci tidak valid)
         st.sidebar.error(f"Error saat mengkonfigurasi Gemini AI. Kunci mungkin tidak valid.")
         logger.error(f"Initialization failed: {e}")
-        return False # Gagal
+        AI_READY = False
+        return False  # Gagal
 
 # --- Operasi Database (Mock Firestore) ---
 
@@ -88,13 +92,13 @@ def load_all_jawaban(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     else:
         return list(st.session_state.mock_db.values())
 
-
 # --- Fungsi Generasi Konten AI (LKPD) ---
 
 def generate_lkpd(theme: str) -> Optional[Dict[str, Any]]:
     """Meminta AI untuk membuat LKPD baru dan mengembalikan JSON yang divalidasi."""
-    if not genai.get_default_model(): 
+    if not AI_READY:
         logger.error("Gemini model is not configured.")
+        st.error("Gagal menginisialisasi Gemini AI. Silakan periksa API key.")
         return None 
 
     prompt = f"""
@@ -158,7 +162,8 @@ def generate_lkpd(theme: str) -> Optional[Dict[str, Any]]:
 
 def score_jawaban(jawaban_text: str, pertanyaan: str) -> Dict[str, Any]:
     """Meminta AI untuk menilai satu jawaban dan memberikan feedback."""
-    if not genai.get_default_model(): return {"score": 0, "feedback": "AI Not Ready"}
+    if not AI_READY:
+        return {"score": 0, "feedback": "AI Not Ready"}
 
     prompt = f"""
     Anda adalah penilai ahli. Berikan nilai 0-100 untuk 'Jawaban Siswa' berdasarkan 'Pertanyaan' dan berikan 'feedback' singkat.
@@ -210,8 +215,8 @@ def score_jawaban(jawaban_text: str, pertanyaan: str) -> Dict[str, Any]:
 
 def score_all_jawaban(all_jawaban: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Menilai semua jawaban siswa yang belum dinilai dan menyimpan hasilnya."""
-    
-    if 'mock_db' not in st.session_state: return []
+    if 'mock_db' not in st.session_state:
+        return []
     
     results = []
     

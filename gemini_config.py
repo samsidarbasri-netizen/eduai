@@ -18,12 +18,10 @@ if not logger.handlers:
     logger.addHandler(ch)
 
 # --- Variabel Global untuk Status Koneksi ---
-# Catatan: Variabel ini akan diinisialisasi di st.session_state di app.py
 DB = None
 AI_READY = False
 
 # --- Konfigurasi Database (Mock untuk fokus pada API Key) ---
-# Dalam proyek nyata, ini akan menjadi Firebase/Firestore
 def init_database():
     """Menginisialisasi database (menggunakan mock DB di session_state)."""
     global DB
@@ -37,7 +35,6 @@ def init_database():
     return True
 
 # --- FUNGSI KRITIS: INISIALISASI GEMINI ---
-# Caching digunakan agar koneksi mahal hanya terjadi sekali
 @st.cache_resource(show_spinner=False)
 def init_gemini() -> bool:
     """Mencari dan menginisialisasi Gemini API Key dari 3 lapisan (Manual, Secrets, Env)."""
@@ -88,7 +85,7 @@ def init_gemini() -> bool:
         AI_READY = False
         return db_ready
 
-# --- Fungsi Utility (Hanya perubahan kecil untuk menggunakan logger) ---
+# --- Fungsi Utility (Sama seperti sebelumnya) ---
 
 def load_lkpd():
     """Memuat LKPD terakhir yang disimpan oleh Guru."""

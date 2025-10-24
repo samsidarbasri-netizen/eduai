@@ -6,9 +6,8 @@ def setup_gemini():
         api_key = st.secrets["GEMINI_API_KEY"]
         genai.configure(api_key=api_key)
 
-        # Model stabil dan sudah support generate_content di v1
-        model = genai.GenerativeModel("gemini-1.5-flash")
-
+        # Model stabil yang masih didukung untuk versi library 0.8.3
+        model = genai.GenerativeModel("models/gemini-1.5-flash")
         return model
 
     except KeyError:

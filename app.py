@@ -1,87 +1,121 @@
 import streamlit as st
-from gemini_config import setup_gemini
+import json
+import os
+import uuid
+from gemini_config import model, generate_lkpd, save_lkpd, load_lkpd
 
-# -------------------------------
-# KONFIGURASI HALAMAN
-# -------------------------------
+# =========================
+# STREAMLIT PAGE CONFIG
+# =========================
 st.set_page_config(
-    page_title="📘 Generator LKPD/LMS Berbasis AI",
-    page_icon="🤖",
-    layout="wide"
+    page_title="LMS Interaktif EduAI",
+    page_icon="🎓",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# -------------------------------
-# HEADER APLIKASI
-# -------------------------------
-st.title("📘 Generator LKPD / LMS Berbasis AI (Gemini + Streamlit)")
-st.caption("Aplikasi ini membantu guru menyusun LKPD/LMS otomatis berbasis topik pembelajaran menggunakan Gemini AI.")
-st.markdown("---")
+# =========================
+# SESSION STATE INIT
+# =========================
+if 'role' not in st.session_state:
+    st.session_state.role = None
 
-# -------------------------------
-# INPUT TOPIK PEMBELAJARAN
-# -------------------------------
-st.subheader("🎯 Masukkan Topik Pembelajaran")
-topic = st.text_input(
-    "Contoh: Sosialisasi dalam Masyarakat",
-    placeholder="Tulis topik pembelajaran di sini..."
-)
+# =========================
+# SIDEBAR ROLE SELECTION
+# =========================
+with st.sidebar:
+    st.title("🎓 Pilih Peran Anda")
+    selected_role = st.radio("Saya adalah:", ["👨🏫 Guru", "👩🎓 Siswa"], key="role_radio")
+    
+    if selected_role and selected_role != st.session_state.role:
+        st.session_state.role = selected_role
+        st.rerun()
 
-# -------------------------------
-# TES KONEKSI API (Opsional)
-# -------------------------------
-with st.expander("🧠 Tes Koneksi API (opsional)"):
-    if st.button("Tes Koneksi Model Gemini"):
-        model = setup_gemini()
-        if model:
-            st.success("✅ Model Gemini terhubung dan siap digunakan!")
-        else:
-            st.error("❌ Model belum bisa diakses. Periksa kunci API di Streamlit Secrets.")
+# =========================
+# MAIN PAGE
+# =========================
+st.title("🚀 LMS Interaktif dengan Gemini AI 2.5")
+st.markdown("Platform untuk membuat dan mengisi LKPD otomatis menggunakan **Gemini AI**.")
 
-# -------------------------------
-# GENERATE LKPD / LMS
-# -------------------------------
-if st.button("✨ Generate LKPD / LMS"):
-    if not topic.strip():
-        st.warning("⚠️ Silakan isi topik terlebih dahulu.")
-    else:
-        st.info("⏳ Sedang membuat LKPD berbasis AI... Mohon tunggu beberapa saat.")
+if not st.session_state.role:
+    st.warning("👈 Silakan pilih peran Anda di sidebar untuk memulai.")
+    st.stop()
 
-        model = setup_gemini()
-        if model:
-            try:
-                prompt = f"""
-                Buatkan LKPD (Lembar Kerja Peserta Didik) mata pelajaran Sosiologi dengan topik "{topic}".
-                LKPD harus memuat:
-                1. Tujuan Pembelajaran (terkait Profil Pelajar Pancasila)
-                2. Pengantar Materi
-                3. Studi Kasus aktual dan relevan
-                4. Pertanyaan Diskusi analitis (5 soal)
-                5. Refleksi Diri Peserta Didik
-                Gunakan bahasa Indonesia yang komunikatif dan dorong siswa berpikir kritis.
-                """
+# =========================
+# MODE GURU
+# =========================
+if st.session_state.role == "👨🏫 Guru":
+    st.header("👨🏫 Mode Guru: Buat LKPD Baru")
 
-                response = model.generate_content(prompt)
-                hasil = response.text.strip() if hasattr(response, "text") else str(response)
+    theme = st.text_input("Masukkan Tema / Topik Pembelajaran (Contoh: Fotosintesis, Ekosistem)")
+    if st.button("🚀 Generate LKPD", use_container_width=True):
+        if not theme:
+            st.warning("⚠️ Mohon isi tema terlebih dahulu.")
+            st.stop()
 
-                st.success("✅ LKPD berhasil dibuat!")
-                st.markdown("### 📄 Hasil LKPD / LMS")
+        with st.spinner("🤖 AI sedang membuat LKPD..."):
+            lkpd_data = generate_lkpd(theme)
+
+            if lkpd_data:
+                lkpd_id = str(uuid.uuid4())[:8]
+                save_lkpd(lkpd_id, lkpd_data)
+                st.session_state.lkpd_data = lkpd_data
+                st.session_state.lkpd_id = lkpd_id
+
+                st.success(f"✅ LKPD berhasil dibuat! ID: `{lkpd_id}`")
                 st.markdown("---")
-                st.write(hasil)
 
-                st.download_button(
-                    label="💾 Unduh LKPD sebagai TXT",
-                    data=hasil,
-                    file_name=f"LKPD_{topic.replace(' ', '_')}.txt",
-                    mime="text/plain"
-                )
+                st.subheader(f"📋 {lkpd_data['judul']}")
+                st.info(lkpd_data['materi_singkat'])
 
-            except Exception as e:
-                st.error(f"🚨 Terjadi kesalahan saat memanggil Gemini API: {e}")
+                for i, kegiatan in enumerate(lkpd_data["kegiatan"], 1):
+                    with st.expander(f"Kegiatan {i}: {kegiatan['nama']}"):
+                        st.markdown(f"**Petunjuk:** {kegiatan['petunjuk']}")
+                        st.markdown("**Tugas Interaktif:**")
+                        for t in kegiatan["tugas_interaktif"]:
+                            st.markdown(f"• {t}")
+                        st.markdown("**Pertanyaan Pemantik:**")
+                        for q in kegiatan["pertanyaan_pemantik"]:
+                            st.markdown(f"❓ {q['pertanyaan']}")
+            else:
+                st.error("❌ Gagal membuat LKPD. Coba lagi nanti.")
+
+    if 'lkpd_id' in st.session_state:
+        st.markdown("---")
+        st.subheader("📂 LKPD Terakhir")
+        st.info(f"ID: {st.session_state.lkpd_id}")
+
+# =========================
+# MODE SISWA
+# =========================
+elif st.session_state.role == "👩🎓 Siswa":
+    st.header("👩🎓 Mode Siswa: Isi LKPD")
+
+    lkpd_id = st.text_input("Masukkan ID LKPD dari Guru:")
+    if lkpd_id:
+        lkpd_data = load_lkpd(lkpd_id)
+        if lkpd_data:
+            st.success(f"✅ LKPD '{lkpd_data['judul']}' dimuat!")
+            st.info(lkpd_data['materi_singkat'])
+            st.markdown("---")
+
+            for i, kegiatan in enumerate(lkpd_data["kegiatan"], 1):
+                with st.expander(f"Kegiatan {i}: {kegiatan['nama']}"):
+                    st.markdown(f"**Petunjuk:** {kegiatan['petunjuk']}")
+                    for tugas in kegiatan["tugas_interaktif"]:
+                        st.markdown(f"• {tugas}")
+
+                    st.markdown("**Pertanyaan Pemantik - Jawaban Anda:**")
+                    for j, q in enumerate(kegiatan["pertanyaan_pemantik"]):
+                        key = f"ans_{i}_{j}"
+                        st.text_area(f"{j+1}. {q['pertanyaan']}", key=key, height=80)
+
+            if st.button("✨ Kirim Jawaban & Minta Feedback", use_container_width=True):
+                st.info("💡 Fitur feedback sedang dikembangkan.")
         else:
-            st.error("❌ Model tidak berhasil dikonfigurasi. Periksa API key di .streamlit/secrets.toml")
+            st.error("❌ ID LKPD tidak ditemukan.")
+    else:
+        st.info("Masukkan ID LKPD untuk mulai.")
 
-# -------------------------------
-# FOOTER
-# -------------------------------
 st.markdown("---")
-st.caption("💡 Dibangun dengan Streamlit + Gemini API | Aman dan efisien (tanpa pemanggilan berulang otomatis)")
+st.caption("**Powered by Google Gemini 2.5 Flash — EduAI**")

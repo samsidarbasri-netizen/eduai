@@ -1,170 +1,118 @@
 import streamlit as st
 import uuid
-import pandas as pd
-from gemini_config import init_model, get_model, generate_lkpd, evaluate_answer_with_ai, save_lkpd, load_lkpd
+import json
+import os
+from gemini_config import init_model, get_model, generate_lkpd
 
-# -------------------------------
-# PAGE CONFIG
-# -------------------------------
-st.set_page_config(page_title="LMS EduAI (Generator & Evaluator)", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="EduAI LKPD Simplified", layout="wide", page_icon="🎓")
 
-# -------------------------------
-# Initialize model using secrets
-# -------------------------------
+# Inisialisasi model Gemini
 api_key = st.secrets.get("GEMINI_API_KEY") if "GEMINI_API_KEY" in st.secrets else None
 ok, msg = init_model(api_key)
 if not ok:
-    st.error(f"Gemini initialization failed: {msg}")
+    st.error(msg)
     st.stop()
 
-model = get_model()
-if model is None:
-    st.error("Model not available after init.")
-    st.stop()
+# Folder penyimpanan lokal
+LKPD_DIR = "lkpd_data"
+os.makedirs(LKPD_DIR, exist_ok=True)
+
+# Sidebar: pilih peran
+role = st.sidebar.radio("Pilih Mode:", ["👩‍🏫 Guru", "👨‍🎓 Siswa"])
 
 # -------------------------------
-# Sidebar: role
+# MODE GURU
 # -------------------------------
-role = st.sidebar.radio("Pilih Peran:", ["👨🏫 Guru", "👩🎓 Siswa"])
+if role == "👩‍🏫 Guru":
+    st.header("👩‍🏫 Mode Guru - Pembuatan & Pemantauan LKPD")
 
-# -------------------------------
-# Siswa: isi & kirim jawaban (simple)
-# -------------------------------
-if role == "👩🎓 Siswa":
-    st.header("👩🎓 Mode Siswa — Isi LKPD")
-    lkpd_id = st.text_input("Masukkan ID LKPD dari Guru (jika ada):")
-    if lkpd_id:
-        lkpd = load_lkpd(lkpd_id)
-        if lkpd:
-            st.success(f"LKPD '{lkpd.get('judul','')}' dimuat.")
-            st.write(lkpd.get("materi_singkat",""))
-            for i,keg in enumerate(lkpd.get("kegiatan",[]),1):
-                with st.expander(f"Kegiatan {i}: {keg.get('nama','')}"):
-                    st.write(keg.get('petunjuk',''))
-                    for j,q in enumerate(keg.get("pertanyaan_pemantik",[]),1):
-                        key = f"ans_{lkpd_id}_{i}_{j}"
-                        st.text_area(f"{j}. {q.get('pertanyaan','')}", key=key, height=120)
-            if st.button("Kirim Semua Jawaban"):
-                st.success("Jawaban disubmit — guru akan mengevaluasi (fitur simpan nanti).")
-        else:
-            st.error("LKPD tidak ditemukan atau file corrupt.")
-    else:
-        st.info("Masukkan ID LKPD agar form muncul.")
+    st.subheader("1️⃣ Buat LKPD Otomatis")
+    theme = st.text_input("Masukkan Tema Pembelajaran:")
 
-# -------------------------------
-# Guru: generate LKPD & semi-otomatis evaluasi
-# -------------------------------
-elif role == "👨🏫 Guru":
-    st.header("👨🏫 Mode Guru")
-
-    st.subheader("1) Generate LKPD Otomatis")
-    theme = st.text_input("Topik / Tema:")
-    if st.button("Generate LKPD"):
+    if st.button("🚀 Buat LKPD"):
         if not theme.strip():
-            st.warning("Masukkan topik terlebih dahulu.")
+            st.warning("Masukkan tema terlebih dahulu.")
         else:
-            with st.spinner("Menghasilkan LKPD..."):
+            with st.spinner("Sedang menghasilkan LKPD..."):
                 lkpd_data = generate_lkpd(theme)
                 if lkpd_data:
                     lkpd_id = str(uuid.uuid4())[:8]
-                    saved = save_lkpd(lkpd_id, lkpd_data)
-                    if saved:
-                        st.success(f"LKPD dibuat (ID: {lkpd_id})")
-                        st.json(lkpd_data)
-                    else:
-                        st.error("Gagal menyimpan LKPD (file I/O).")
+                    path = os.path.join(LKPD_DIR, f"{lkpd_id}.json")
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump(lkpd_data, f, indent=2, ensure_ascii=False)
+                    st.success(f"✅ LKPD berhasil dibuat (ID: {lkpd_id})")
+                    st.json(lkpd_data)
                 else:
-                    st.error("Gagal menghasilkan LKPD (AI). Coba lagi nanti.")
+                    st.error("Gagal membuat LKPD. Coba lagi nanti.")
 
     st.markdown("---")
-    st.subheader("2) Evaluasi Jawaban Siswa (Semi-Otomatis)")
-    st.caption("Tempel jawaban siswa, klik 'AI Evaluate' → sesuaikan → simpan.")
+    st.subheader("2️⃣ Tambahkan Contoh Jawaban Benar")
 
-    student_name = st.text_input("Nama Siswa (opsional):")
-    question_text = st.text_input("Pertanyaan (opsional):")
-    student_answer = st.text_area("Tempel Jawaban Siswa di sini:", height=220)
+    lkpd_files = [f for f in os.listdir(LKPD_DIR) if f.endswith(".json")]
+    if lkpd_files:
+        chosen = st.selectbox("Pilih LKPD untuk menambahkan contoh jawaban:", lkpd_files)
+        path = os.path.join(LKPD_DIR, chosen)
+        data = json.load(open(path, encoding="utf-8"))
 
-    if st.button("AI Evaluate"):
-        if not student_answer.strip():
-            st.warning("Tempel jawaban siswa dulu.")
-        else:
-            with st.spinner("AI sedang menilai..."):
-                eval_res = evaluate_answer_with_ai(student_answer, question_text)
-                if eval_res.get("error"):
-                    st.error(f"AI Error: {eval_res.get('error')}")
-                    if eval_res.get("raw"):
-                        st.code(eval_res.get("raw")[:2000])
+        for i, q in enumerate(data.get("pertanyaan", []), start=1):
+            key = f"answer_{i}"
+            q["jawaban_benar"] = st.text_area(f"✅ Contoh jawaban untuk '{q['soal']}'", key=key, height=100)
+
+        if st.button("💾 Simpan Jawaban Contoh"):
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            st.success("Contoh jawaban berhasil disimpan.")
+    else:
+        st.info("Belum ada LKPD yang dibuat.")
+
+    st.markdown("---")
+    st.subheader("3️⃣ Lihat Jawaban Siswa")
+    uploaded = st.file_uploader("Unggah file jawaban siswa (.json):", type=["json"])
+    if uploaded:
+        answers = json.load(uploaded)
+        st.write("📋 Jawaban siswa yang dikirim:")
+        for ans in answers:
+            st.markdown(f"**Siswa:** {ans['nama']} — **Soal:** {ans['soal']}")
+            st.write(f"📝 Jawaban Siswa: {ans['jawaban']}")
+            st.write(f"✅ Contoh Jawaban Benar: {ans.get('jawaban_benar','(belum ada)')}")
+            st.markdown("---")
+
+# -------------------------------
+# MODE SISWA
+# -------------------------------
+else:
+    st.header("👨‍🎓 Mode Siswa - Isi LKPD")
+
+    lkpd_id = st.text_input("Masukkan ID LKPD yang diberikan guru:")
+    if lkpd_id:
+        path = os.path.join(LKPD_DIR, f"{lkpd_id}.json")
+        if os.path.exists(path):
+            data = json.load(open(path, encoding="utf-8"))
+            st.success(f"LKPD '{data.get('judul','')}' dimuat.")
+            st.write(data.get("materi_singkat",""))
+
+            jawaban_siswa = []
+            nama = st.text_input("Nama Siswa:")
+
+            for q in data.get("pertanyaan", []):
+                ans = st.text_area(f"{q['soal']}", height=100)
+                jawaban_siswa.append({
+                    "nama": nama,
+                    "soal": q["soal"],
+                    "jawaban": ans,
+                    "jawaban_benar": q.get("jawaban_benar", "")
+                })
+
+            if st.button("📤 Kirim Jawaban"):
+                if not nama.strip():
+                    st.warning("Masukkan nama terlebih dahulu.")
                 else:
-                    st.success("AI memberikan penilaian awal.")
-                    st.metric("Skor (AI)", eval_res["overall_score"])
-                    st.write("Breakdown (AI):", eval_res["score_breakdown"])
-                    st.info("Feedback (AI):")
-                    st.write(eval_res["feedback"])
-                    st.info("Recommendation (AI):")
-                    st.write(eval_res["recommendation"])
-                    # store temporarily for adjustment
-                    st.session_state["last_evaluation"] = {
-                        "student_name": student_name,
-                        "question": question_text,
-                        "answer": student_answer,
-                        "ai": eval_res
-                    }
-
-    # jika ada last eval, tampilkan form penyesuaian
-    if "last_evaluation" in st.session_state:
-        le = st.session_state["last_evaluation"]
-        ai = le["ai"]
-        st.markdown("---")
-        st.subheader("Penyesuaian Hasil (oleh Guru)")
-        final_score = st.number_input("Skor akhir (guru)", min_value=0, max_value=100, value=int(ai.get("overall_score", 0)))
-        sb = ai.get("score_breakdown", {})
-        c = st.number_input("Concept", 0, 100, value=int(sb.get("concept", 0)))
-        a = st.number_input("Analysis", 0, 100, value=int(sb.get("analysis", 0)))
-        ctx = st.number_input("Context", 0, 100, value=int(sb.get("context", 0)))
-        r = st.number_input("Reflection", 0, 100, value=int(sb.get("reflection", 0)))
-        teacher_notes = st.text_area("Catatan Guru (opsional)", height=120)
-
-        if st.button("Simpan Evaluasi"):
-            record = {
-                "id": str(uuid.uuid4())[:8],
-                "student_name": le.get("student_name",""),
-                "question": le.get("question",""),
-                "answer": le.get("answer",""),
-                "final_score": int(final_score),
-                "breakdown": {"concept":int(c),"analysis":int(a),"context":int(ctx),"reflection":int(r)},
-                "teacher_notes": teacher_notes,
-                "ai_raw": ai.get("raw","")
-            }
-            # simpan ke session list
-            if "evaluations" not in st.session_state:
-                st.session_state["evaluations"] = []
-            st.session_state["evaluations"].append(record)
-            # simpan ke CSV volatile
-            df = pd.DataFrame([{
-                "id": record["id"],
-                "student_name": record["student_name"],
-                "question": record["question"],
-                "answer": record["answer"],
-                "final_score": record["final_score"],
-                "concept": record["breakdown"]["concept"],
-                "analysis": record["breakdown"]["analysis"],
-                "context": record["breakdown"]["context"],
-                "reflection": record["breakdown"]["reflection"],
-                "teacher_notes": record["teacher_notes"]
-            }])
-            if os.path.exists(EVAL_PATH := "evaluations.csv"):
-                df.to_csv(EVAL_PATH, mode="a", header=False, index=False)
-            else:
-                df.to_csv(EVAL_PATH, index=False)
-            st.success(f"✅ Evaluasi tersimpan (ID: {record['id']}).")
-            # clear temp
-            st.session_state.pop("last_evaluation", None)
-
-    # show quick table of evaluations in this session
-    if "evaluations" in st.session_state and st.session_state["evaluations"]:
-        st.markdown("---")
-        st.subheader("Riwayat Evaluasi (sesi saat ini)")
-        st.write(st.session_state["evaluations"])
-
-st.markdown("---")
-st.caption("EduAI — Gemini-powered semi-automatic evaluation.")
+                    fname = f"jawaban_{nama.replace(' ','_')}.json"
+                    with open(fname, "w", encoding="utf-8") as f:
+                        json.dump(jawaban_siswa, f, indent=2, ensure_ascii=False)
+                    st.download_button("📥 Unduh File Jawaban (kirim ke guru)", data=open(fname, "r", encoding="utf-8").read(), file_name=fname)
+                    st.success("Jawaban disiapkan untuk dikirim ke guru.")
+        else:
+            st.error("LKPD dengan ID tersebut tidak ditemukan.")
+    else:
+        st.info("Masukkan ID LKPD dari guru untuk memulai.")

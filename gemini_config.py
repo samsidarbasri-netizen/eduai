@@ -1,18 +1,30 @@
-import streamlit as st
+import os
 import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv()  # untuk lokal, Streamlit Cloud otomatis lewati ini
 
 def setup_gemini():
+    """
+    Mengatur koneksi ke Gemini AI dan mengembalikan model generatif yang siap digunakan.
+    """
     try:
-        api_key = st.secrets["GEMINI_API_KEY"]
+        # Ambil API key dari .env atau Streamlit secrets
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            import streamlit as st
+            api_key = st.secrets["GOOGLE_API_KEY"]
+
+        if not api_key:
+            raise ValueError("API key tidak ditemukan di secrets atau .env")
+
+        # Konfigurasi Gemini
         genai.configure(api_key=api_key)
 
-        # Model stabil yang masih didukung untuk versi library 0.8.3
-        model = genai.GenerativeModel("models/gemini-1.5-flash")
+        # Gunakan model yang valid di v1 API
+        model = genai.GenerativeModel("gemini-1.5-flash")
         return model
 
-    except KeyError:
-        st.error("❌ Kunci API belum ditemukan di Streamlit Secrets.")
-        return None
     except Exception as e:
-        st.error(f"⚠️ Gagal memuat model Gemini: {e}")
+        print(f"⚠️ Kesalahan konfigurasi Gemini: {e}")
         return None

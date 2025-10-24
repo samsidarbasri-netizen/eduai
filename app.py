@@ -27,7 +27,7 @@ topic = st.text_input(
 )
 
 # -------------------------------
-# TOMBOL TES KONEKSI API
+# TES KONEKSI API (Opsional)
 # -------------------------------
 with st.expander("🧠 Tes Koneksi API (opsional)"):
     if st.button("Tes Koneksi Model Gemini"):
@@ -38,7 +38,7 @@ with st.expander("🧠 Tes Koneksi API (opsional)"):
             st.error("❌ Model belum bisa diakses. Periksa kunci API di Streamlit Secrets.")
 
 # -------------------------------
-# TOMBOL GENERATE LKPD
+# GENERATE LKPD / LMS
 # -------------------------------
 if st.button("✨ Generate LKPD / LMS"):
     if not topic.strip():
@@ -61,15 +61,16 @@ if st.button("✨ Generate LKPD / LMS"):
                 """
 
                 response = model.generate_content(prompt)
+                hasil = response.text.strip() if hasattr(response, "text") else str(response)
 
                 st.success("✅ LKPD berhasil dibuat!")
                 st.markdown("### 📄 Hasil LKPD / LMS")
                 st.markdown("---")
-                st.write(response.text)
+                st.write(hasil)
 
                 st.download_button(
                     label="💾 Unduh LKPD sebagai TXT",
-                    data=response.text,
+                    data=hasil,
                     file_name=f"LKPD_{topic.replace(' ', '_')}.txt",
                     mime="text/plain"
                 )

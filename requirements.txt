@@ -3,14 +3,4 @@ google-generativeai>=0.9.0
 python-dotenv>=1.0.1
 requests>=2.32.3
 protobuf>=5.27.2
-pandas>=2.2.3# --- Core ---
-streamlit>=1.38.0
-google-generativeai>=0.8.3
-python-dotenv>=1.0.1
-
-# --- Tambahan keamanan dan stabilitas ---
-requests>=2.31.0
-protobuf>=4.25.3
-
-# --- Opsional: untuk tampilan lebih rapi ---
-pandas>=2.2.2
+pandas>=2.2.3

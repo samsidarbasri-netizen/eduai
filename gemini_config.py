@@ -1,19 +1,19 @@
-import google.generativeai as genai
 import streamlit as st
+import google.generativeai as genai
 
 def setup_gemini():
     try:
-        # Ambil API key dari secrets
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        api_key = st.secrets["GEMINI_API_KEY"]
+        genai.configure(api_key=api_key)
 
-        # Gunakan model yang benar dan stabil
-        model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
+        # Model stabil dan sudah support generate_content di v1
+        model = genai.GenerativeModel("gemini-1.5-flash")
 
         return model
 
     except KeyError:
-        st.error("❌ Kunci API belum diset di Streamlit Secrets.")
+        st.error("❌ Kunci API belum ditemukan di Streamlit Secrets.")
         return None
     except Exception as e:
-        st.error(f"⚠️ Terjadi kesalahan konfigurasi model: {e}")
+        st.error(f"⚠️ Gagal memuat model Gemini: {e}")
         return None

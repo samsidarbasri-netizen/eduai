@@ -1,13 +1,10 @@
 """
-gemini_config.py — FINAL STABLE DEEP LEARNING VERSION
+gemini_config.py — FINAL CLEAN TEXT VERSION
 -----------------------------------------------------
-✅ Kompatibel penuh dengan app.py versi 3 tahap.
-✅ LKPD dihasilkan otomatis dengan format pembelajaran mendalam:
-   - Memahami
-   - Mengaplikasikan
-   - Merefleksi
-✅ Analisis jawaban siswa semi-otomatis.
-✅ Aman, rapi, dan bebas error.
+✅ Format Pembelajaran Mendalam (Memahami – Mengaplikasikan – Merefleksi)
+✅ LKPD hanya berupa teks konseptual — tanpa grafik, tabel, diagram, atau gambar
+✅ Skor otomatis 0 + feedback “Siswa tidak menjawab.”
+✅ Aman & kompatibel penuh dengan app.py
 """
 
 import os
@@ -31,13 +28,13 @@ def _extract_json_from_text(text: str) -> Optional[str]:
     if not text:
         return None
     cleaned = text.replace("```json", "").replace("```", "").strip()
-    match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     return match.group(0) if match else cleaned
 
 
 # ------------------ Model Init ------------------
 def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
-    """Inisialisasi model Gemini dengan key dari Streamlit secrets."""
+    """Inisialisasi model Gemini dengan API key."""
     global _MODEL, _CHOSEN_MODEL_NAME
     debug = {}
     try:
@@ -72,6 +69,7 @@ def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
 
 
 def get_model():
+    """Ambil instance model aktif."""
     return _MODEL
 
 
@@ -85,15 +83,19 @@ def list_available_models() -> Dict[str, Any]:
 
 
 # ------------------ LKPD Generator ------------------
-
 def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Menghasilkan LKPD format Pembelajaran Mendalam (Teoritis Tanpa Perhitungan)
+    Struktur 3 tahap: Memahami – Mengaplikasikan – Merefleksi
+    Tidak boleh mengandung gambar, grafik, tabel, diagram, atau visual apapun.
+    """
     debug = {"chosen_model": _CHOSEN_MODEL_NAME}
     model = get_model()
     if not model:
         debug["error"] = "Model not initialized"
         return None, debug
 
-    # Prompt baru: format Pembelajaran Mendalam (Teoritis Tanpa Perhitungan)
+    # Prompt revisi sesuai permintaan
     prompt = f"""
     Buatkan saya Lembar Kerja Peserta Didik (LKPD) untuk materi: {theme}.
 
@@ -159,17 +161,19 @@ def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, An
       "format_akhir": "Jawaban Siswa (Nama Siswa: …)"
     }}
 
-    Pastikan semua pertanyaan dan skenario bersifat kualitatif dan konseptual (tanpa perhitungan angka).
-    Hasilkan HANYA JSON valid sesuai format di atas, tanpa tambahan teks lain.
+    ⚠️ Catatan penting:
+    - Hanya gunakan teks naratif dan pertanyaan reflektif.
+    - Jangan membuat atau menyebut grafik, diagram, tabel, gambar, atau bentuk visual lainnya.
+    - Semua penjelasan dan pertanyaan harus bersifat konseptual dan kualitatif, tanpa angka atau rumus.
+    - Hasilkan HANYA JSON valid sesuai format di atas (tanpa tambahan teks lain).
     """
 
     attempt = 0
-    last_raw = None
     while attempt <= max_retry:
         try:
             response = model.generate_content(prompt)
             raw = getattr(response, "text", str(response))
-            debug["raw_response"] = raw[:5000]
+            debug["raw_response"] = raw[:4000]
             json_block = _extract_json_from_text(raw)
             if not json_block:
                 raise ValueError("Tidak ditemukan blok JSON")
@@ -181,9 +185,7 @@ def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, An
             attempt += 1
             time.sleep(0.5)
             if attempt > max_retry:
-                debug["last_raw"] = last_raw
                 return None, debug
-
 
 
 # ------------------ Penilaian Jawaban Siswa ------------------
@@ -192,16 +194,20 @@ def analyze_answer_with_ai(answer_text: str) -> Dict[str, Any]:
     AI memberikan penilaian semi-otomatis:
     - Skor numerik 0–100
     - Analisis singkat terhadap pemahaman siswa
+    - Jika jawaban kosong → skor 0, feedback "Siswa tidak menjawab."
     """
     model = get_model()
     if not model:
         return {"score": 0, "feedback": "Model belum siap."}
 
+    if not answer_text or not answer_text.strip():
+        return {"score": 0, "feedback": "Siswa tidak menjawab."}
+
     prompt = f"""
     Analisis kualitas jawaban siswa berikut berdasarkan ketepatan konsep dan kedalaman pemahaman.
 
     Jawaban siswa:
-    \"\"\"{answer_text}\"\"\"
+    \"\"\"{answer_text}\"\"\" 
 
     Berikan skor (0–100) dan analisis singkat.
     Format output JSON valid:

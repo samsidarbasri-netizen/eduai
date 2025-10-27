@@ -2,7 +2,6 @@ import streamlit as st
 import uuid
 import json
 import os
-import io
 import re
 import pandas as pd
 from gemini_config import (
@@ -32,7 +31,6 @@ def card(title: str, content: str, color: str = "#f9fafb"):
         unsafe_allow_html=True,
     )
 
-
 # ------------------ Init Model ------------------
 st.title("EduAI — LKPD Modern Viewer")
 st.caption("AI membantu membuat LKPD dan analisis pemahaman siswa secara semi-otomatis.")
@@ -49,13 +47,12 @@ else:
 st.sidebar.header("Navigasi")
 role = st.sidebar.radio("Pilih Peran", ["👨🏫 Guru", "👩🎓 Siswa"])
 st.sidebar.divider()
-if st.sidebar.button("🔎 Tes koneksi (list models)"):
+if st.sidebar.button("🔎 Tes koneksi (list models)") :
     info = list_available_models()
     if info.get("ok"):
         st.sidebar.success(f"{info['count']} model ditemukan.")
     else:
         st.sidebar.error(info.get("error", "Gagal memeriksa model."))
-
 
 # =========================================================
 # MODE GURU
@@ -128,17 +125,6 @@ if role == "👨🏫 Guru":
                     st.markdown("## 📊 Rekapan Nilai Siswa")
                     df = pd.DataFrame(rekap)
                     st.dataframe(df, width='stretch')
-
-                    # Ekspor Excel
-                    buffer = io.BytesIO()
-                    df.to_excel(buffer, index=False, engine='openpyxl')
-                    buffer.seek(0)
-                    st.download_button(
-                        "📤 Ekspor Rekapan ke Excel",
-                        data=buffer,
-                        file_name=f"rekapan_{lkpd_id}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
 
 # =========================================================
 # MODE SISWA

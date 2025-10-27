@@ -86,44 +86,30 @@ def list_available_models() -> Dict[str, Any]:
 
 # ------------------ LKPD Generator ------------------
 def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
-    """
-    Membuat LKPD dengan 3 tahap pembelajaran mendalam:
-    1. Memahami
-    2. Mengaplikasikan
-    3. Merefleksi
-    Format JSON dijamin rapi dan konsisten.
-    """
     debug = {"chosen_model": _CHOSEN_MODEL_NAME}
     model = get_model()
     if not model:
-        debug["error"] = "Model belum diinisialisasi"
+        debug["error"] = "Model not initialized"
         return None, debug
 
     prompt = f"""
-    Anda adalah asisten guru yang profesional dalam merancang LKPD (Lembar Kerja Peserta Didik)
-    berbasis pembelajaran mendalam sesuai panduan Kemendikbud.
-
-    Buatkan LKPD dengan tema: "{theme}".
-
-    LKPD harus memiliki 3 tahap pembelajaran:
-    1. Memahami — berisi kegiatan untuk mengamati, menanya, dan membangun konsep awal.
-    2. Mengaplikasikan — berisi kegiatan untuk menerapkan konsep dalam situasi nyata.
-    3. Merefleksi — berisi kegiatan reflektif untuk menarik kesimpulan dan nilai-nilai.
-
-    Format output HARUS JSON valid dengan struktur seperti ini:
+    Buatkan LKPD pembelajaran mendalam dengan tema: "{theme}".
+    LKPD harus terdiri dari tiga tahap utama: Memahami, Mengaplikasikan, dan Merefleksi.
+    Setiap tahap harus memiliki kegiatan, petunjuk, dan pertanyaan pemantik.
+    Format keluaran HARUS JSON valid seperti ini:
 
     {{
       "judul": "Judul LKPD",
       "tujuan_pembelajaran": ["Tujuan 1", "Tujuan 2"],
-      "materi_singkat": "Ringkasan materi dalam 1 paragraf yang mudah dipahami siswa.",
+      "materi_singkat": "Ringkasan singkat konsep utama dalam 3–5 kalimat.",
       "tahapan": [
         {{
           "nama_tahap": "Memahami",
-          "deskripsi": "Deskripsi umum tahap memahami.",
+          "deskripsi": "Penjelasan tahap memahami.",
           "kegiatan": [
             {{
-              "nama": "Kegiatan 1",
-              "petunjuk": "Langkah-langkah kegiatan.",
+              "nama": "Nama kegiatan memahami",
+              "petunjuk": "Langkah kegiatan memahami.",
               "pertanyaan_pemantik": [
                 {{"pertanyaan": "Pertanyaan 1"}},
                 {{"pertanyaan": "Pertanyaan 2"}}
@@ -133,11 +119,11 @@ def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, An
         }},
         {{
           "nama_tahap": "Mengaplikasikan",
-          "deskripsi": "Deskripsi umum tahap mengaplikasikan.",
+          "deskripsi": "Penjelasan tahap mengaplikasikan.",
           "kegiatan": [
             {{
-              "nama": "Kegiatan 2",
-              "petunjuk": "Langkah-langkah kegiatan aplikasi konsep.",
+              "nama": "Nama kegiatan mengaplikasikan",
+              "petunjuk": "Langkah kegiatan mengaplikasikan.",
               "pertanyaan_pemantik": [
                 {{"pertanyaan": "Pertanyaan 1"}},
                 {{"pertanyaan": "Pertanyaan 2"}}
@@ -147,43 +133,38 @@ def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, An
         }},
         {{
           "nama_tahap": "Merefleksi",
-          "deskripsi": "Deskripsi umum tahap refleksi pembelajaran.",
+          "deskripsi": "Penjelasan tahap merefleksi.",
           "kegiatan": [
             {{
-              "nama": "Kegiatan 3",
-              "petunjuk": "Langkah refleksi atau diskusi akhir.",
+              "nama": "Nama kegiatan merefleksi",
+              "petunjuk": "Langkah kegiatan merefleksi.",
               "pertanyaan_pemantik": [
-                {{"pertanyaan": "Apa yang kamu pelajari hari ini?"}},
-                {{"pertanyaan": "Bagaimana penerapan konsep ini dalam kehidupan sehari-hari?"}}
+                {{"pertanyaan": "Pertanyaan 1"}},
+                {{"pertanyaan": "Pertanyaan 2"}}
               ]
             }}
           ]
         }}
-      ],
-      "jawaban_benar": ["Contoh jawaban 1", "Contoh jawaban 2"]
+      ]
     }}
     """
 
     attempt = 0
-    last_raw = None
     while attempt <= max_retry:
         try:
             response = model.generate_content(prompt)
             raw = getattr(response, "text", str(response))
-            debug["raw_response"] = raw[:3000]
+            debug["raw_response"] = raw[:5000]
             json_block = _extract_json_from_text(raw)
-            if not json_block:
-                raise ValueError("Tidak ditemukan blok JSON")
-
             data = json.loads(json_block)
             return data, debug
         except Exception as e:
-            debug.setdefault("attempts", []).append(f"{type(e).__name__}: {e}")
+            debug.setdefault("errors", []).append(str(e))
             attempt += 1
-            time.sleep(0.6)
+            time.sleep(0.5)
             if attempt > max_retry:
-                debug["last_raw"] = last_raw
                 return None, debug
+
 
 
 # ------------------ Penilaian Jawaban Siswa ------------------

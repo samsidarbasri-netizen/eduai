@@ -18,7 +18,6 @@ def sanitize_id(s: str) -> str:
 os.makedirs(LKPD_DIR, exist_ok=True)
 os.makedirs(ANSWERS_DIR, exist_ok=True)
 
-
 def card(title: str, content: str, color: str = "#f9fafb"):
     st.markdown(
         f"""
@@ -85,7 +84,6 @@ if role == "👨🏫 Guru":
                         st.json(dbg)
 
     # ---------- PANTAU JAWABAN ----------
-       # ---------- PANTAU JAWABAN ----------
     with tab_monitor:
         st.subheader("Pantau Jawaban Siswa")
         lkpd_id = st.text_input("Masukkan ID LKPD yang ingin dipantau")

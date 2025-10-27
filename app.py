@@ -1,165 +1,268 @@
-import streamlit as st
-import uuid
-import json
+"""
+gemini_config.py (defensive version with semi-automatic evaluator)
+
+Exports:
+ - init_model(api_key) -> (ok:bool, message:str, debug:dict)
+ - list_available_models() -> dict
+ - get_model()
+ - generate_lkpd(theme, max_retry=1) -> (data_or_none, debug)
+ - evaluate_answer_with_ai(answer_text, question_text="", max_retry=1) -> dict
+ - save_json / load_json helpers
+
+This module does NOT import streamlit at top-level (safe to import).
+"""
+
 import os
+import json
 import re
-from gemini_config import (
-    init_model, list_available_models, generate_lkpd,
-    save_json, load_json, LKPD_DIR, ANSWERS_DIR
-)
+import time
+from typing import Optional, Dict, Any, Tuple
 
-# ---------------------------------------------------------
-# Utility & Setup
-# ---------------------------------------------------------
-st.set_page_config(page_title="EduAI LKPD Modern", layout="wide", page_icon="🎓")
+import google.generativeai as genai
 
-def sanitize_id(s: str) -> str:
-    return re.sub(r"[^\w\-]", "_", s.strip())[:64]
+# Local storage (volatile on Streamlit Cloud)
+LKPD_DIR = "lkpd_outputs"
+ANSWERS_DIR = "answers"
 
-os.makedirs(LKPD_DIR, exist_ok=True)
-os.makedirs(ANSWERS_DIR, exist_ok=True)
+_MODEL = None
+_CHOSEN_MODEL_NAME = None
 
-def card(title: str, content: str, color="#f9fafb"):
-    """Card-style block with light accent background."""
-    st.markdown(
-        f"""
-        <div style='background:{color};padding:12px 18px;border-radius:10px;
-        box-shadow:0 1px 3px rgba(0,0,0,0.1);margin-bottom:10px;'>
-        <div style='font-weight:600;font-size:17px;margin-bottom:6px;'>{title}</div>
-        <div style='font-size:14px;line-height:1.5;'>{content}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+def _extract_json_from_text(text: str) -> Optional[str]:
+    """Extract first JSON object from text. Return string or None."""
+    if not text:
+        return None
+    cleaned = text.replace("```json", "").replace("```", "").strip()
+    # Try to find the outermost JSON object using simple heuristics.
+    # This is robust for usual responses where model returns a single {...}.
+    m = re.search(r'\{(?:[^{}]|(?R))*\}', cleaned, re.DOTALL)
+    if m:
+        return m.group(0)
+    # fallback: find first { ... last }
+    m2 = re.search(r'\{.*\}', cleaned, re.DOTALL)
+    return m2.group(0) if m2 else None
 
-# ---------------------------------------------------------
-# Init model
-# ---------------------------------------------------------
-st.title("EduAI — LKPD Modern Viewer")
-st.caption("AI hanya membuat LKPD, bukan jawaban siswa. Tampilan diperindah agar UX siswa lebih baik.")
+def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
+    """
+    Initialize genai and select a model if available.
+    Returns (ok, message, debug_info)
+    """
+    global _MODEL, _CHOSEN_MODEL_NAME
+    debug = {}
+    try:
+        if not api_key or not isinstance(api_key, str) or api_key.strip() == "":
+            return False, "API key kosong atau tidak valid.", debug
 
-api_key = st.secrets.get("GEMINI_API_KEY") if "GEMINI_API_KEY" in st.secrets else None
-ok, msg, debug = init_model(api_key)
-if not ok:
-    st.error(f"Gemini init failed: {msg}")
-    st.info("Tambahkan GEMINI_API_KEY di Secrets → Manage App.")
-    st.stop()
-else:
-    st.success(msg)
+        genai.configure(api_key=api_key)
 
-# ---------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------
-st.sidebar.header("Navigasi")
-role = st.sidebar.radio("Pilih Peran:", ["👨🏫 Guru", "👩🎓 Siswa"])
-st.sidebar.divider()
-if st.sidebar.button("🔎 Tes koneksi (list models)"):
-    info = list_available_models()
-    if info.get("ok"):
-        st.sidebar.success(f"{info['count']} models ditemukan")
-    else:
-        st.sidebar.error(info.get("error"))
+        # Try to list models once for debug (non-fatal)
+        try:
+            models = genai.list_models()
+            model_names = [m.name for m in models]
+            debug['available_models'] = model_names
+        except Exception as e:
+            debug['list_models_error'] = f"{type(e).__name__}: {e}"
+            model_names = []
 
-# ---------------------------------------------------------
-# Mode Guru
-# ---------------------------------------------------------
-if role == "👨🏫 Guru":
-    st.header("👨🏫 Mode Guru — Buat & Pantau LKPD")
+        candidates = [
+            "models/gemini-2.5-flash",
+            "gemini-2.5-flash",
+            "models/gemini-1.5-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5"
+        ]
 
-    tab_create, tab_monitor = st.tabs(["✏️ Buat LKPD", "📊 Pantau Jawaban"])
+        chosen = None
+        for c in candidates:
+            if not model_names or c in model_names:
+                chosen = c
+                break
 
-    # ---- BUAT LKPD ----
-    with tab_create:
-        st.subheader("Buat LKPD (dengan bantuan AI)")
-        tema = st.text_input("Tema / Topik pembelajaran:")
-        if st.button("Generate LKPD (AI)"):
-            if not tema.strip():
-                st.warning("Masukkan tema terlebih dahulu.")
-            else:
-                with st.spinner("Menghasilkan LKPD..."):
-                    data, dbg = generate_lkpd(tema, max_retry=1)
-                    if data:
-                        lkpd_id = str(uuid.uuid4())[:8]
-                        save_json(LKPD_DIR, lkpd_id, data)
-                        st.success(f"✅ LKPD berhasil dibuat (ID: {lkpd_id})")
-                        st.json(data)
-                        st.download_button(
-                            "📥 Unduh LKPD (JSON)",
-                            json.dumps(data, ensure_ascii=False, indent=2),
-                            file_name=f"LKPD_{lkpd_id}.json"
-                        )
-                    else:
-                        st.error("Gagal membuat LKPD.")
-                        st.json(dbg)
+        if not chosen:
+            chosen = "models/gemini-1.5-flash"
 
-    # ---- PANTAU JAWABAN ----
-    with tab_monitor:
-        st.subheader("Pantau Jawaban Siswa")
-        lkpd_id = st.text_input("Masukkan ID LKPD yang ingin dipantau:")
-        if lkpd_id:
-            lkpd = load_json(LKPD_DIR, lkpd_id)
-            if not lkpd:
-                st.error("LKPD tidak ditemukan.")
-            else:
-                st.success(f"LKPD: {lkpd.get('judul','Tanpa judul')}")
-                answers = load_json(ANSWERS_DIR, lkpd_id) or {}
-                if not answers:
-                    st.info("Belum ada jawaban siswa.")
-                else:
-                    for nama, record in answers.items():
-                        st.markdown(f"### 🧑‍🎓 {nama}")
-                        for idx, q in enumerate(record.get("jawaban", []), 1):
-                            st.markdown(f"**{idx}. {q.get('pertanyaan')}**")
-                            st.write(q.get("jawaban"))
-                            # contoh jawaban AI hanya ditampilkan di mode guru:
-                            corrects = lkpd.get("jawaban_benar", [])
-                            if idx <= len(corrects):
-                                st.info(f"💡 Contoh jawaban (AI): {corrects[idx-1]}")
-                            st.number_input(
-                                f"Nilai {nama} - Pertanyaan {idx}",
-                                0, 100, 0, key=f"{nama}_{lkpd_id}_{idx}"
-                            )
-                        st.divider()
+        try:
+            _MODEL = genai.GenerativeModel(chosen)
+            _CHOSEN_MODEL_NAME = chosen
+            debug['chosen_model'] = chosen
+            return True, f"Model initialized: {chosen}", debug
+        except Exception as e:
+            debug['init_model_error'] = f"{type(e).__name__}: {e}"
+            # last resort fallback
+            try:
+                _MODEL = genai.GenerativeModel("gemini-1.5-flash")
+                _CHOSEN_MODEL_NAME = "gemini-1.5-flash"
+                debug['fallback_used'] = "gemini-1.5-flash"
+                return True, "Model initialized with fallback gemini-1.5-flash", debug
+            except Exception as e2:
+                debug['fallback_error'] = f"{type(e2).__name__}: {e2}"
+                return False, f"Failed to initialize model: {e} ; fallback failed: {e2}", debug
 
-# ---------------------------------------------------------
-# Mode Siswa
-# ---------------------------------------------------------
-else:
-    st.header("👩🎓 Mode Siswa — Kerjakan LKPD")
-    lkpd_id = st.text_input("Masukkan ID LKPD yang diberikan guru:")
-    nama = st.text_input("Nama lengkap:")
-    if lkpd_id and nama:
-        lkpd = load_json(LKPD_DIR, lkpd_id)
-        if not lkpd:
-            st.error("LKPD tidak ditemukan.")
-        else:
-            st.success(f"LKPD: {lkpd.get('judul','Tanpa judul')}")
-            card("🎯 Tujuan Pembelajaran", "<br>".join(lkpd.get("tujuan_pembelajaran", [])), "#eef2ff")
-            card("📚 Materi Singkat", lkpd.get("materi_singkat","(Belum ada materi)"), "#f0fdf4")
+    except Exception as e:
+        return False, f"Unexpected init error: {type(e).__name__}: {e}", debug
 
-            jawaban_list = []
-            for i, kegiatan in enumerate(lkpd.get("kegiatan", []), 1):
-                with st.expander(f"Kegiatan {i}: {kegiatan.get('nama','')}"):
-                    st.write(kegiatan.get("petunjuk",""))
-                    for j, q in enumerate(kegiatan.get("pertanyaan_pemantik", []), 1):
-                        ans = st.text_area(
-                            f"{i}.{j} {q.get('pertanyaan')}",
-                            key=f"{lkpd_id}_{nama}_{i}_{j}", height=120
-                        )
-                        jawaban_list.append({"pertanyaan": q.get("pertanyaan"), "jawaban": ans})
+def list_available_models() -> Dict[str, Any]:
+    """Return dict with available model names or error details."""
+    try:
+        models = genai.list_models()
+        return {"ok": True, "count": len(models), "names": [m.name for m in models]}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-            if st.button("📤 Submit Jawaban"):
-                existing = load_json(ANSWERS_DIR, lkpd_id) or {}
-                existing[nama] = {
-                    "jawaban": jawaban_list,
-                    "submitted_at": str(__import__("datetime").datetime.now())
-                }
-                save_json(ANSWERS_DIR, lkpd_id, existing)
-                st.success("Jawaban terkirim! Guru akan menilai dari sistem.")
-                st.download_button(
-                    "📥 Unduh salinan jawaban",
-                    json.dumps(jawaban_list, ensure_ascii=False, indent=2),
-                    file_name=f"jawaban_{lkpd_id}_{nama}.json"
-                )
-    else:
-        st.info("Masukkan ID LKPD dan nama untuk mulai mengerjakan.")
+def get_model():
+    return _MODEL
+
+def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Generate LKPD; returns (data_dict_or_None, debug_info)
+    """
+    debug = {"chosen_model": _CHOSEN_MODEL_NAME}
+    model = get_model()
+    if model is None:
+        debug['error'] = "Model not initialized"
+        return None, debug
+
+    prompt = f"""
+    Anda adalah perancang bahan ajar. Buatkan sebuah LKPD (Lembar Kerja Peserta Didik)
+    untuk tema \"{theme}\" jenjang SMA. OUTPUT HANYA: JSON valid tanpa penjelasan.
+    Format contoh:
+    {{
+      "judul": "Judul LKPD",
+      "tujuan_pembelajaran": ["Tujuan 1", "Tujuan 2"],
+      "materi_singkat": "Ringkasan 1 paragraf.",
+      "kegiatan": [
+        {{
+          "nama":"Kegiatan 1",
+          "petunjuk":"Petunjuk singkat",
+          "tugas_interaktif":["Tugas 1","Tugas 2"],
+          "pertanyaan_pemantik":[{{"pertanyaan":"Pertanyaan 1"}}]
+        }}
+      ],
+      "jawaban_benar": ["Contoh jawaban 1", "Contoh jawaban 2"]
+    }}
+    """
+
+    attempt = 0
+    last_raw = None
+    while attempt <= max_retry:
+        try:
+            response = model.generate_content(prompt)
+            raw = getattr(response, "text", str(response))
+            debug['raw_response'] = raw[:8000] if raw else ""
+            last_raw = raw
+
+            json_part = _extract_json_from_text(raw)
+            if not json_part:
+                debug['parse_error'] = "No JSON block found"
+                raise ValueError("No JSON block found")
+
+            data = json.loads(json_part)
+            debug['success'] = True
+            return data, debug
+
+        except Exception as e:
+            debug.setdefault('attempts', []).append({"attempt": attempt, "error": f"{type(e).__name__}: {e}"})
+            attempt += 1
+            time.sleep(0.8 * attempt)
+            if attempt > max_retry:
+                if last_raw:
+                    debug['last_raw'] = last_raw[:8000]
+                return None, debug
+
+def evaluate_answer_with_ai(answer_text: str, question_text: str = "", max_retry: int = 1) -> Dict[str, Any]:
+    """
+    Semi-automatic evaluator.
+    Returns dict with keys:
+      - overall_score (int 0-100) OR None
+      - feedback (str)
+      - recommendation (str)
+      - breakdown (dict) optional
+      - raw (raw model text)
+      - error (optional)
+    """
+    debug = {"chosen_model": _CHOSEN_MODEL_NAME}
+    model = get_model()
+    if model is None:
+        return {"error": "Model not initialized."}
+
+    if not answer_text or not isinstance(answer_text, str):
+        return {"error": "Empty or invalid answer_text."}
+
+    prompt = f"""
+    Anda adalah seorang guru dan penilai. Berikan penilaian awal untuk jawaban siswa berikut.
+    Output: JSON only.
+    Fields:
+      - overall_score: integer antara 0 dan 100
+      - breakdown: {{ "concept": int, "analysis": int, "context": int, "reflection": int }}
+      - feedback: short constructive feedback (1-3 sentences)
+      - recommendation: 1-2 actionable tips for student
+
+    Question: {question_text}
+    Student Answer: {answer_text}
+    """
+
+    attempt = 0
+    last_raw = None
+    while attempt <= max_retry:
+        try:
+            response = model.generate_content(prompt)
+            raw = getattr(response, "text", str(response))
+            debug['raw_response'] = raw[:8000] if raw else ""
+            last_raw = raw
+
+            json_part = _extract_json_from_text(raw)
+            if not json_part:
+                return {"error": "No JSON found in model response", "raw": raw}
+
+            parsed = json.loads(json_part)
+            # safe extraction with defaults
+            overall = parsed.get("overall_score") or parsed.get("overall") or 0
+            try:
+                overall = int(overall)
+            except Exception:
+                overall = 0
+
+            breakdown = parsed.get("breakdown") or parsed.get("score_breakdown") or {}
+            # normalize
+            bd = {
+                "concept": int(breakdown.get("concept", 0)),
+                "analysis": int(breakdown.get("analysis", 0)),
+                "context": int(breakdown.get("context", 0)),
+                "reflection": int(breakdown.get("reflection", 0))
+            }
+
+            feedback = parsed.get("feedback", "")
+            recommendation = parsed.get("recommendation", parsed.get("tips",""))
+
+            result = {
+                "overall_score": max(0, min(100, overall)),
+                "breakdown": bd,
+                "feedback": feedback,
+                "recommendation": recommendation,
+                "raw": raw
+            }
+            debug['success'] = True
+            result['debug'] = debug
+            return result
+
+        except Exception as e:
+            debug.setdefault('attempts', []).append({"attempt": attempt, "error": f"{type(e).__name__}: {e}"})
+            attempt += 1
+            time.sleep(0.6 * attempt)
+            if attempt > max_retry:
+                if last_raw:
+                    debug['last_raw'] = last_raw[:8000]
+                return {"error": "Evaluation failed", "debug": debug}
+
+# simple save/load
+def save_json(folder: str, file_id: str, data: dict):
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{file_id}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def load_json(folder: str, file_id: str):
+    path = os.path.join(folder, f"{file_id}.json")
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None

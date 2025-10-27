@@ -1,15 +1,23 @@
 """
-gemini_config.py (defensive version with semi-automatic evaluator)
+gemini_config.py (versi final — stabil & berbobot)
 
-Exports:
- - init_model(api_key) -> (ok:bool, message:str, debug:dict)
- - list_available_models() -> dict
- - get_model()
- - generate_lkpd(theme, max_retry=1) -> (data_or_none, debug)
- - evaluate_answer_with_ai(answer_text, question_text="", max_retry=1) -> dict
- - save_json / load_json helpers
+Fungsi utama:
+- init_model(api_key): inisialisasi koneksi Gemini
+- list_available_models(): memeriksa model
+- generate_lkpd(theme): menghasilkan LKPD berbobot berbasis HOTS
+- save_json() & load_json(): penyimpanan aman lokal
 
-This module does NOT import streamlit at top-level (safe to import).
+Struktur LKPD yang dihasilkan:
+{
+  "judul": "Judul LKPD",
+  "kompetensi_dasar": "KD terkait",
+  "tujuan_pembelajaran": ["Tujuan 1", "Tujuan 2"],
+  "materi_singkat": "Ringkasan 1 paragraf",
+  "kegiatan": [
+    {"nama": "...", "petunjuk": "...", "pertanyaan_pemantik": [{"pertanyaan": "..."}]}
+  ],
+  "jawaban_benar": ["Contoh jawaban 1", "Contoh jawaban 2"]
+}
 """
 
 import os
@@ -17,52 +25,55 @@ import json
 import re
 import time
 from typing import Optional, Dict, Any, Tuple
-
 import google.generativeai as genai
 
-# Local storage (volatile on Streamlit Cloud)
+# Folder lokal untuk simpan data
 LKPD_DIR = "lkpd_outputs"
 ANSWERS_DIR = "answers"
 
+# Variabel global model
 _MODEL = None
 _CHOSEN_MODEL_NAME = None
 
+
+# -------------------------------------------------------------
+# Utilitas internal
+# -------------------------------------------------------------
 def _extract_json_from_text(text: str) -> Optional[str]:
-    """Extract first JSON object from text. Return string or None."""
+    """Ambil blok JSON dari teks balasan Gemini."""
     if not text:
         return None
     cleaned = text.replace("```json", "").replace("```", "").strip()
-    # Try to find the outermost JSON object using simple heuristics.
-    # This is robust for usual responses where model returns a single {...}.
-    m = re.search(r'\{(?:[^{}]|(?R))*\}', cleaned, re.DOTALL)
-    if m:
-        return m.group(0)
-    # fallback: find first { ... last }
-    m2 = re.search(r'\{.*\}', cleaned, re.DOTALL)
-    return m2.group(0) if m2 else None
+    m = re.search(r'\{.*\}', cleaned, re.DOTALL)
+    return m.group(0) if m else cleaned
 
+
+# -------------------------------------------------------------
+# Inisialisasi model
+# -------------------------------------------------------------
 def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
     """
-    Initialize genai and select a model if available.
-    Returns (ok, message, debug_info)
+    Inisialisasi Gemini model. Mengembalikan (ok, pesan, debug).
     """
     global _MODEL, _CHOSEN_MODEL_NAME
     debug = {}
+
     try:
         if not api_key or not isinstance(api_key, str) or api_key.strip() == "":
             return False, "API key kosong atau tidak valid.", debug
 
         genai.configure(api_key=api_key)
 
-        # Try to list models once for debug (non-fatal)
+        # Coba list model
         try:
             models = genai.list_models()
             model_names = [m.name for m in models]
-            debug['available_models'] = model_names
+            debug["available_models"] = model_names
         except Exception as e:
-            debug['list_models_error'] = f"{type(e).__name__}: {e}"
+            debug["list_models_error"] = f"{type(e).__name__}: {e}"
             model_names = []
 
+        # Pilih model terbaik yang tersedia
         candidates = [
             "models/gemini-2.5-flash",
             "gemini-2.5-flash",
@@ -70,75 +81,100 @@ def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
             "gemini-1.5-flash",
             "gemini-1.5"
         ]
-
         chosen = None
         for c in candidates:
             if not model_names or c in model_names:
                 chosen = c
                 break
-
         if not chosen:
             chosen = "models/gemini-1.5-flash"
 
+        # Buat model instance
         try:
             _MODEL = genai.GenerativeModel(chosen)
             _CHOSEN_MODEL_NAME = chosen
-            debug['chosen_model'] = chosen
-            return True, f"Model initialized: {chosen}", debug
+            debug["chosen_model"] = chosen
+            return True, f"Model diinisialisasi: {chosen}", debug
         except Exception as e:
-            debug['init_model_error'] = f"{type(e).__name__}: {e}"
-            # last resort fallback
-            try:
-                _MODEL = genai.GenerativeModel("gemini-1.5-flash")
-                _CHOSEN_MODEL_NAME = "gemini-1.5-flash"
-                debug['fallback_used'] = "gemini-1.5-flash"
-                return True, "Model initialized with fallback gemini-1.5-flash", debug
-            except Exception as e2:
-                debug['fallback_error'] = f"{type(e2).__name__}: {e2}"
-                return False, f"Failed to initialize model: {e} ; fallback failed: {e2}", debug
+            debug["init_model_error"] = f"{type(e).__name__}: {e}"
+            _MODEL = genai.GenerativeModel("gemini-1.5-flash")
+            _CHOSEN_MODEL_NAME = "gemini-1.5-flash"
+            debug["fallback_used"] = "gemini-1.5-flash"
+            return True, "Model fallback gemini-1.5-flash digunakan.", debug
 
     except Exception as e:
-        return False, f"Unexpected init error: {type(e).__name__}: {e}", debug
+        return False, f"Error inisialisasi: {type(e).__name__}: {e}", debug
 
+
+# -------------------------------------------------------------
+# Dapatkan model aktif
+# -------------------------------------------------------------
+def get_model():
+    return _MODEL
+
+
+# -------------------------------------------------------------
+# List model
+# -------------------------------------------------------------
 def list_available_models() -> Dict[str, Any]:
-    """Return dict with available model names or error details."""
     try:
         models = genai.list_models()
         return {"ok": True, "count": len(models), "names": [m.name for m in models]}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-def get_model():
-    return _MODEL
 
+# -------------------------------------------------------------
+# Generate LKPD berbobot
+# -------------------------------------------------------------
 def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     """
-    Generate LKPD; returns (data_dict_or_None, debug_info)
+    Generate LKPD yang relevan, berbasis HOTS & KD.
+    Mengembalikan (data_dict_or_None, debug_info)
     """
     debug = {"chosen_model": _CHOSEN_MODEL_NAME}
     model = get_model()
     if model is None:
-        debug['error'] = "Model not initialized"
+        debug["error"] = "Model belum diinisialisasi."
         return None, debug
 
     prompt = f"""
-    Anda adalah perancang bahan ajar. Buatkan sebuah LKPD (Lembar Kerja Peserta Didik)
-    untuk tema \"{theme}\" jenjang SMA. OUTPUT HANYA: JSON valid tanpa penjelasan.
-    Format contoh:
+    Kamu adalah asisten edukatif profesional yang membantu guru membuat LKPD berkualitas tinggi.
+    Buat LKPD tematik berbasis HOTS (Higher Order Thinking Skills) untuk tema: "{theme}".
+    LKPD harus relevan dengan Kurikulum Merdeka SMA dan mencakup KD, tujuan pembelajaran, kegiatan analitis, dan refleksi nilai sosial.
+
+    OUTPUT hanya JSON valid (tanpa penjelasan tambahan) dengan format berikut:
     {{
-      "judul": "Judul LKPD",
-      "tujuan_pembelajaran": ["Tujuan 1", "Tujuan 2"],
-      "materi_singkat": "Ringkasan 1 paragraf.",
+      "judul": "LKPD {theme}",
+      "kompetensi_dasar": "KD yang paling relevan dengan tema ini.",
+      "tujuan_pembelajaran": [
+        "Dirumuskan dengan kata kerja operasional (mis. menganalisis, mengevaluasi, mencipta)"
+      ],
+      "materi_singkat": "Ringkasan konseptual singkat (1 paragraf) yang relevan dan komunikatif.",
       "kegiatan": [
         {{
-          "nama":"Kegiatan 1",
-          "petunjuk":"Petunjuk singkat",
-          "tugas_interaktif":["Tugas 1","Tugas 2"],
-          "pertanyaan_pemantik":[{{"pertanyaan":"Pertanyaan 1"}}]
+          "nama": "Kegiatan 1 — Analisis Kasus Sosial",
+          "petunjuk": "Baca kasus yang disajikan lalu jawab pertanyaan analisisnya.",
+          "pertanyaan_pemantik": [
+            {{"pertanyaan": "Apa penyebab utama fenomena ini?"}},
+            {{"pertanyaan": "Bagaimana dampaknya terhadap masyarakat?"}},
+            {{"pertanyaan": "Solusi apa yang dapat diterapkan?"}}
+          ]
+        }},
+        {{
+          "nama": "Kegiatan 2 — Refleksi Nilai Sosial",
+          "petunjuk": "Tuliskan pandangan pribadimu berdasarkan nilai sosial dan kemanusiaan.",
+          "pertanyaan_pemantik": [
+            {{"pertanyaan": "Nilai apa yang dapat kamu pelajari dari kasus ini?"}},
+            {{"pertanyaan": "Bagaimana nilai tersebut diterapkan dalam kehidupan sehari-hari?"}}
+          ]
         }}
       ],
-      "jawaban_benar": ["Contoh jawaban 1", "Contoh jawaban 2"]
+      "jawaban_benar": [
+        "Contoh jawaban yang mencerminkan analisis mendalam, berpikir kritis, dan nilai sosial positif."
+      ]
     }}
+    Pastikan struktur JSON valid dan seluruh bagian relevan dengan tema "{theme}".
     """
 
     attempt = 0
@@ -147,120 +183,50 @@ def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, An
         try:
             response = model.generate_content(prompt)
             raw = getattr(response, "text", str(response))
-            debug['raw_response'] = raw[:8000] if raw else ""
+            debug["raw_response"] = raw[:3000] if raw else ""
             last_raw = raw
 
             json_part = _extract_json_from_text(raw)
             if not json_part:
-                debug['parse_error'] = "No JSON block found"
+                debug["parse_error"] = "Tidak ditemukan blok JSON."
                 raise ValueError("No JSON block found")
 
-            data = json.loads(json_part)
-            debug['success'] = True
+            start = json_part.find("{")
+            end = json_part.rfind("}")
+            if start == -1 or end == -1:
+                debug["parse_error"] = "JSON rusak."
+                raise ValueError("Malformed JSON block")
+
+            json_str = json_part[start:end + 1]
+            data = json.loads(json_str)
+            debug["success"] = True
             return data, debug
 
         except Exception as e:
-            debug.setdefault('attempts', []).append({"attempt": attempt, "error": f"{type(e).__name__}: {e}"})
+            debug.setdefault("attempts", []).append(
+                {"attempt": attempt, "error": f"{type(e).__name__}: {e}"}
+            )
             attempt += 1
             time.sleep(0.8 * attempt)
             if attempt > max_retry:
                 if last_raw:
-                    debug['last_raw'] = last_raw[:8000]
+                    debug["last_raw"] = last_raw[:5000]
                 return None, debug
 
-def evaluate_answer_with_ai(answer_text: str, question_text: str = "", max_retry: int = 1) -> Dict[str, Any]:
-    """
-    Semi-automatic evaluator.
-    Returns dict with keys:
-      - overall_score (int 0-100) OR None
-      - feedback (str)
-      - recommendation (str)
-      - breakdown (dict) optional
-      - raw (raw model text)
-      - error (optional)
-    """
-    debug = {"chosen_model": _CHOSEN_MODEL_NAME}
-    model = get_model()
-    if model is None:
-        return {"error": "Model not initialized."}
 
-    if not answer_text or not isinstance(answer_text, str):
-        return {"error": "Empty or invalid answer_text."}
-
-    prompt = f"""
-    Anda adalah seorang guru dan penilai. Berikan penilaian awal untuk jawaban siswa berikut.
-    Output: JSON only.
-    Fields:
-      - overall_score: integer antara 0 dan 100
-      - breakdown: {{ "concept": int, "analysis": int, "context": int, "reflection": int }}
-      - feedback: short constructive feedback (1-3 sentences)
-      - recommendation: 1-2 actionable tips for student
-
-    Question: {question_text}
-    Student Answer: {answer_text}
-    """
-
-    attempt = 0
-    last_raw = None
-    while attempt <= max_retry:
-        try:
-            response = model.generate_content(prompt)
-            raw = getattr(response, "text", str(response))
-            debug['raw_response'] = raw[:8000] if raw else ""
-            last_raw = raw
-
-            json_part = _extract_json_from_text(raw)
-            if not json_part:
-                return {"error": "No JSON found in model response", "raw": raw}
-
-            parsed = json.loads(json_part)
-            # safe extraction with defaults
-            overall = parsed.get("overall_score") or parsed.get("overall") or 0
-            try:
-                overall = int(overall)
-            except Exception:
-                overall = 0
-
-            breakdown = parsed.get("breakdown") or parsed.get("score_breakdown") or {}
-            # normalize
-            bd = {
-                "concept": int(breakdown.get("concept", 0)),
-                "analysis": int(breakdown.get("analysis", 0)),
-                "context": int(breakdown.get("context", 0)),
-                "reflection": int(breakdown.get("reflection", 0))
-            }
-
-            feedback = parsed.get("feedback", "")
-            recommendation = parsed.get("recommendation", parsed.get("tips",""))
-
-            result = {
-                "overall_score": max(0, min(100, overall)),
-                "breakdown": bd,
-                "feedback": feedback,
-                "recommendation": recommendation,
-                "raw": raw
-            }
-            debug['success'] = True
-            result['debug'] = debug
-            return result
-
-        except Exception as e:
-            debug.setdefault('attempts', []).append({"attempt": attempt, "error": f"{type(e).__name__}: {e}"})
-            attempt += 1
-            time.sleep(0.6 * attempt)
-            if attempt > max_retry:
-                if last_raw:
-                    debug['last_raw'] = last_raw[:8000]
-                return {"error": "Evaluation failed", "debug": debug}
-
-# simple save/load
+# -------------------------------------------------------------
+# Simpan & muat JSON
+# -------------------------------------------------------------
 def save_json(folder: str, file_id: str, data: dict):
+    """Simpan JSON ke folder tertentu."""
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, f"{file_id}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+
 def load_json(folder: str, file_id: str):
+    """Muat JSON jika tersedia."""
     path = os.path.join(folder, f"{file_id}.json")
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:

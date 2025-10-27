@@ -1,147 +1,152 @@
 import os
 import json
 import re
-import time
 from typing import Optional, Dict, Any, Tuple
 import google.generativeai as genai
+import pandas as pd
+from datetime import datetime
 
 LKPD_DIR = "lkpd_outputs"
 ANSWERS_DIR = "answers"
+REKAP_DIR = "rekap"
+
 _MODEL = None
 _CHOSEN_MODEL_NAME = None
 
-# ---------------------------------------------------------
-# JSON Extraction Helper
-# ---------------------------------------------------------
+os.makedirs(LKPD_DIR, exist_ok=True)
+os.makedirs(ANSWERS_DIR, exist_ok=True)
+os.makedirs(REKAP_DIR, exist_ok=True)
+
+
 def _extract_json_from_text(text: str) -> Optional[str]:
     if not text:
         return None
     cleaned = text.replace("```json", "").replace("```", "").strip()
-    m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    m = re.search(r'\{.*\}', cleaned, re.DOTALL)
     return m.group(0) if m else cleaned
 
-# ---------------------------------------------------------
-# INIT MODEL
-# ---------------------------------------------------------
+
 def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
     global _MODEL, _CHOSEN_MODEL_NAME
     debug = {}
-
-    if not api_key or not isinstance(api_key, str) or api_key.strip() == "":
-        return False, "API key kosong atau tidak valid.", debug
-
     try:
-        genai.configure(api_key=api_key)
-        models = genai.list_models()
-        model_names = [m.name for m in models]
-        debug["available_models"] = model_names
+        if not api_key or not isinstance(api_key, str) or api_key.strip() == "":
+            return False, "API key kosong atau tidak valid.", debug
 
+        genai.configure(api_key=api_key)
+
+        # Ambil model
         candidates = [
             "models/gemini-2.5-flash",
-            "gemini-2.5-flash",
             "models/gemini-1.5-flash",
-            "gemini-1.5-flash",
             "gemini-1.5"
         ]
-        chosen = next((c for c in candidates if not model_names or c in model_names), "models/gemini-1.5-flash")
 
-        _MODEL = genai.GenerativeModel(chosen)
+        chosen = None
+        for c in candidates:
+            try:
+                _MODEL = genai.GenerativeModel(c)
+                chosen = c
+                break
+            except Exception:
+                continue
+
+        if not chosen:
+            return False, "Gagal inisialisasi model Gemini.", debug
+
         _CHOSEN_MODEL_NAME = chosen
         debug["chosen_model"] = chosen
-        return True, f"Model initialized: {chosen}", debug
+        return True, f"Model aktif: {chosen}", debug
 
     except Exception as e:
-        return False, f"Init error: {e}", debug
+        return False, f"Unexpected init error: {type(e).__name__}: {e}", debug
+
 
 def get_model():
     return _MODEL
 
-# ---------------------------------------------------------
-# GENERATE LKPD
-# ---------------------------------------------------------
-def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
-    debug = {"chosen_model": _CHOSEN_MODEL_NAME}
+
+def analyze_answer_with_ai(answer: str) -> Dict[str, Any]:
+    """Analisis jawaban per pertanyaan"""
     model = get_model()
-    if model is None:
-        debug["error"] = "Model not initialized"
-        return None, debug
+    if not model or not answer:
+        return {"penjelasan": "Model tidak aktif atau jawaban kosong.", "skor": 0}
 
     prompt = f"""
-    Buat LKPD interaktif untuk tema "{theme}".
-    Output HARUS JSON valid dengan format:
+    Analisis jawaban berikut dari siswa dan berikan skor 0-100 serta penjelasan singkat:
+    Jawaban: {answer}
+
+    Format keluaran:
     {{
-      "judul": "Judul LKPD",
-      "tujuan_pembelajaran": ["Tujuan 1", "Tujuan 2"],
-      "materi_singkat": "Ringkasan singkat dan kontekstual.",
-      "kegiatan": [
-        {{
-          "nama": "Kegiatan 1",
-          "petunjuk": "Langkah singkat kegiatan.",
-          "pertanyaan_pemantik": [
-            {{"pertanyaan": "Pertanyaan analitis dan kontekstual."}},
-            {{"pertanyaan": "Pertanyaan reflektif."}}
-          ]
-        }}
-      ],
-      "jawaban_benar": ["Contoh jawaban yang baik dan lengkap."]
+        "skor": <angka>,
+        "penjelasan": "<teks singkat>"
     }}
     """
 
     try:
-        response = model.generate_content(prompt)
-        raw = getattr(response, "text", str(response))
-        json_part = _extract_json_from_text(raw)
-        data = json.loads(json_part)
-        return data, debug
-    except Exception as e:
-        debug["error"] = str(e)
-        return None, debug
+        res = model.generate_content(prompt)
+        extracted = _extract_json_from_text(res.text)
+        if extracted:
+            return json.loads(extracted)
+    except Exception:
+        pass
+    return {"penjelasan": "Analisis gagal.", "skor": 0}
 
-# ---------------------------------------------------------
-# ANALISIS JAWABAN (Semi-Otomatis)
-# ---------------------------------------------------------
-def analyze_answer_with_ai(answer: str) -> Dict[str, Any]:
-    """AI menganalisis kualitas jawaban siswa"""
+
+def analyze_student_overall(nama: str, jawaban_list: list) -> Dict[str, Any]:
+    """Analisis pemahaman keseluruhan siswa berdasarkan semua jawaban"""
     model = get_model()
-    if not model or not answer:
-        return {"penjelasan": "Tidak ada analisis.", "skor": 0}
+    if not model or not jawaban_list:
+        return {"nama": nama, "rata_nilai": 0, "analisis_singkat": "Tidak ada jawaban."}
+
+    gabung_jawaban = "\n".join([f"{i+1}. {j['jawaban']}" for i, j in enumerate(jawaban_list)])
+    prompt = f"""
+    Berdasarkan kumpulan jawaban berikut dari siswa bernama {nama}, analisis tingkat pemahamannya.
+    Berikan skor rata-rata (0-100) dan deskripsi singkat (maks 30 kata).
+
+    Jawaban:
+    {gabung_jawaban}
+
+    Format keluaran JSON:
+    {{
+        "rata_nilai": <angka>,
+        "analisis_singkat": "<teks singkat>"
+    }}
+    """
 
     try:
-        prompt = f"""
-        Analisislah jawaban berikut dari siswa:
-        "{answer}"
+        res = model.generate_content(prompt)
+        extracted = _extract_json_from_text(res.text)
+        if extracted:
+            result = json.loads(extracted)
+            return {
+                "nama": nama,
+                "rata_nilai": result.get("rata_nilai", 0),
+                "analisis_singkat": result.get("analisis_singkat", "")
+            }
+    except Exception:
+        pass
 
-        Berikan penilaian tingkat pemahaman (0–100)
-        dan penjelasan singkat mengapa mendapat skor itu.
-        Format:
-        {{
-            "penjelasan": "...",
-            "skor": 0–100
-        }}
-        """
-        response = model.generate_content(prompt)
-        raw = getattr(response, "text", str(response))
-        json_part = _extract_json_from_text(raw)
-        result = json.loads(json_part)
-        return {
-            "penjelasan": result.get("penjelasan", "(Tanpa penjelasan)"),
-            "skor": result.get("skor", 0)
-        }
-    except Exception as e:
-        return {"penjelasan": f"AI error: {e}", "skor": 0}
+    return {"nama": nama, "rata_nilai": 0, "analisis_singkat": "Gagal analisis."}
 
-# ---------------------------------------------------------
-# SAVE / LOAD JSON
-# ---------------------------------------------------------
-def save_json(folder: str, file_id: str, data: dict):
-    os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, f"{file_id}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
-def load_json(folder: str, file_id: str):
-    path = os.path.join(folder, f"{file_id}.json")
+def export_rekap_to_excel(lkpd_id: str, rekap_data: list) -> str:
+    """Ekspor hasil rekap nilai ke file Excel"""
+    df = pd.DataFrame(rekap_data)
+    filename = os.path.join(REKAP_DIR, f"{lkpd_id}_rekap.xlsx")
+    df.to_excel(filename, index=False)
+    return filename
+
+
+def load_json(folder, name):
+    path = os.path.join(folder, f"{name}.json")
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     return None
+
+
+def save_json(folder, name, data):
+    path = os.path.join(folder, f"{name}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)

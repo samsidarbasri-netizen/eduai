@@ -85,9 +85,11 @@ if role == "👨🏫 Guru":
                         st.json(dbg)
 
     # ---------- PANTAU JAWABAN ----------
+       # ---------- PANTAU JAWABAN ----------
     with tab_monitor:
         st.subheader("Pantau Jawaban Siswa")
         lkpd_id = st.text_input("Masukkan ID LKPD yang ingin dipantau")
+
         if lkpd_id:
             lkpd = load_json(LKPD_DIR, lkpd_id)
             if not lkpd:
@@ -97,34 +99,62 @@ if role == "👨🏫 Guru":
                 if not answers:
                     st.info("Belum ada jawaban siswa.")
                 else:
+                    # 🔘 Pilihan Mode Penilaian
+                    mode_penilaian = st.radio(
+                        "Pilih Metode Penilaian",
+                        ["💡 Penilaian Otomatis (AI)", "✍️ Penilaian Manual (Guru)"],
+                        horizontal=True
+                    )
+
                     rekap = []
                     for nama, record in answers.items():
                         st.markdown(f"### 🧑🎓 {nama}")
                         total_score = 0
                         count = 0
+
                         for idx, q in enumerate(record.get("jawaban", []), 1):
                             st.markdown(f"{idx}. **{q.get('pertanyaan')}**")
-                            st.write(q.get("jawaban"))
-                            ai_eval = analyze_answer_with_ai(q.get("jawaban"))
-                            score = ai_eval.get("score", 0)
-                            fb = ai_eval.get("feedback", "")
+                            st.write(q.get("jawaban") or "_(tidak ada jawaban)_")
+
+                            # === MODE PENILAIAN AI ===
+                            if mode_penilaian == "💡 Penilaian Otomatis (AI)":
+                                ai_eval = analyze_answer_with_ai(q.get("jawaban"))
+                                score = ai_eval.get("score", 0)
+                                fb = ai_eval.get("feedback", "")
+                                st.info(f"💬 Feedback AI: {fb} (Skor: {score})")
+
+                            # === MODE PENILAIAN MANUAL ===
+                            else:
+                                score = st.number_input(
+                                    f"Masukkan skor untuk pertanyaan {idx}",
+                                    min_value=0, max_value=100, value=0,
+                                    key=f"{nama}_{idx}_score"
+                                )
+                                fb = st.text_area(
+                                    f"Catatan guru (opsional)",
+                                    key=f"{nama}_{idx}_fb",
+                                    height=60
+                                )
+
                             total_score += score
                             count += 1
-                            st.info(f"💡 Feedback AI: {fb} (Skor: {score})")
+
                         avg = round(total_score / count, 2) if count else 0
                         rekap.append({
                             "Nama": nama,
                             "Rata-rata Skor": avg,
-                            "Analisis AI": "Pemahaman tinggi" if avg > 80 else
-                                           "Cukup baik" if avg >= 60 else
-                                           "Perlu bimbingan"
+                            "Analisis AI": (
+                                "Pemahaman tinggi" if avg > 80 else
+                                "Cukup baik" if avg >= 60 else
+                                "Perlu bimbingan"
+                            )
                         })
                         st.divider()
 
-                    # Tabel Rekap
+                    # ===== TABEL REKAP NILAI =====
                     st.markdown("## 📊 Rekapan Nilai Siswa")
                     df = pd.DataFrame(rekap)
-                    st.dataframe(df, width='stretch')
+                    st.dataframe(df, use_container_width=True)
 
 # =========================================================
 # MODE SISWA

@@ -1,117 +1,176 @@
 import streamlit as st
+import uuid
+import json
+import os
+import io
+import re
 import pandas as pd
-from gemini_config import setup_gemini, analyze_answer, analyze_class_summary
+from gemini_config import (
+    init_model, list_available_models, generate_lkpd,
+    analyze_answer_with_ai, save_json, load_json, LKPD_DIR, ANSWERS_DIR
+)
 
-# ====== Inisialisasi ======
-st.set_page_config(page_title="EduAI LKPD Analyzer", layout="wide")
+# ------------------ Setup ------------------
+st.set_page_config(page_title="EduAI LKPD Modern", layout="wide", page_icon="🎓")
 
-if "lkpd_list" not in st.session_state:
-    st.session_state.lkpd_list = {}
-if "answers" not in st.session_state:
-    st.session_state.answers = []
-if "rekap_done" not in st.session_state:
-    st.session_state.rekap_done = False
+def sanitize_id(s: str) -> str:
+    return re.sub(r"[^\w-]", "_", s.strip())[:64]
 
-# ====== Sidebar ======
-st.sidebar.title("EduAI LKPD System")
-menu = st.sidebar.radio("Navigasi", ["👩‍🏫 Mode Guru", "👨‍🎓 Mode Siswa", "📊 Rekapan Nilai"])
+os.makedirs(LKPD_DIR, exist_ok=True)
+os.makedirs(ANSWERS_DIR, exist_ok=True)
 
-# ====== API Key ======
-api_key = st.sidebar.text_input("Masukkan API Key Gemini:", type="password")
-if api_key:
-    model = setup_gemini(api_key)
-else:
-    st.warning("Masukkan API Key Gemini terlebih dahulu.")
+
+def card(title: str, content: str, color: str = "#f9fafb"):
+    st.markdown(
+        f"""
+        <div style='background:{color};padding:12px 18px;border-radius:10px;
+        box-shadow:0 1px 3px rgba(0,0,0,0.1);margin-bottom:10px;'>
+        <div style='font-weight:600;font-size:17px;margin-bottom:6px;'>{title}</div>
+        <div style='font-size:14px;line-height:1.5;'>{content}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ------------------ Init Model ------------------
+st.title("EduAI — LKPD Modern Viewer")
+st.caption("AI membantu membuat LKPD dan analisis pemahaman siswa secara semi-otomatis.")
+
+api_key = st.secrets.get("GEMINI_API_KEY") if "GEMINI_API_KEY" in st.secrets else st.text_input("🔑 Masukkan API Key Gemini")
+ok, msg, debug = init_model(api_key)
+if not ok:
+    st.error(msg)
     st.stop()
+else:
+    st.success(msg)
 
-# ====== MODE GURU ======
-if menu == "👩‍🏫 Mode Guru":
-    st.header("👩‍🏫 Mode Guru — Buat & Pantau LKPD")
+# ------------------ Sidebar ------------------
+st.sidebar.header("Navigasi")
+role = st.sidebar.radio("Pilih Peran", ["👨🏫 Guru", "👩🎓 Siswa"])
+st.sidebar.divider()
+if st.sidebar.button("🔎 Tes koneksi (list models)"):
+    info = list_available_models()
+    if info.get("ok"):
+        st.sidebar.success(f"{info['count']} model ditemukan.")
+    else:
+        st.sidebar.error(info.get("error", "Gagal memeriksa model."))
 
-    tab1, tab2 = st.tabs(["🧾 Buat LKPD", "📖 Pemantauan Jawaban Siswa"])
 
-    with tab1:
-        st.subheader("Buat LKPD Baru")
-        theme = st.text_input("Masukkan Tema LKPD:")
-        if st.button("Generate LKPD"):
-            if theme:
-                st.session_state.lkpd_list[theme] = f"LKPD tentang {theme}. Lengkapi pertanyaan dan pembahasan."
-                st.success(f"LKPD '{theme}' berhasil dibuat!")
-            else:
+# =========================================================
+# MODE GURU
+# =========================================================
+if role == "👨🏫 Guru":
+    st.header("👨🏫 Mode Guru — Buat & Pantau LKPD")
+    tab_create, tab_monitor = st.tabs(["✏️ Buat LKPD", "📊 Pantau Jawaban"])
+
+    # ---------- BUAT LKPD ----------
+    with tab_create:
+        tema = st.text_input("Tema / Topik Pembelajaran")
+        if st.button("Generate LKPD (AI)"):
+            if not tema.strip():
                 st.warning("Masukkan tema terlebih dahulu.")
-
-        if st.session_state.lkpd_list:
-            st.subheader("Daftar LKPD")
-            for tema, konten in st.session_state.lkpd_list.items():
-                with st.expander(tema):
-                    st.write(konten)
-
-    with tab2:
-        st.subheader("📖 Pemantauan Jawaban Siswa")
-        if len(st.session_state.answers) == 0:
-            st.info("Belum ada jawaban siswa masuk.")
-        else:
-            df = pd.DataFrame(st.session_state.answers)
-            st.dataframe(df, use_container_width=True)
-
-            if st.button("Analisis Tingkat Pemahaman Kelas"):
-                summary = analyze_class_summary(model, st.session_state.answers)
-                st.session_state.rekap_done = True
-                st.markdown("### 🧠 Analisis Kelas:")
-                st.write(summary)
-
-# ====== MODE SISWA ======
-elif menu == "👨‍🎓 Mode Siswa":
-    st.header("👨‍🎓 Mode Siswa — Kerjakan LKPD")
-
-    if not st.session_state.lkpd_list:
-        st.warning("Belum ada LKPD yang dibuat guru.")
-    else:
-        name = st.text_input("Nama Siswa:")
-        selected_lkpd = st.selectbox("Pilih LKPD:", list(st.session_state.lkpd_list.keys()))
-        question = st.session_state.lkpd_list[selected_lkpd]
-        st.info(f"**Soal:** {question}")
-
-        answer = st.text_area("Tuliskan Jawabanmu di sini:")
-        if st.button("Kirim Jawaban"):
-            if name and answer:
-                ai_feedback = analyze_answer(model, question, answer)
-                st.success("Jawaban berhasil dikirim dan dianalisis AI!")
-
-                # Simpan hasil
-                nilai = 0
-                for line in ai_feedback.splitlines():
-                    if "nilai" in line.lower():
-                        import re
-                        match = re.search(r'(\d+)', line)
-                        if match:
-                            nilai = int(match.group(1))
-                            break
-
-                st.session_state.answers.append({
-                    "Nama": name,
-                    "LKPD": selected_lkpd,
-                    "Jawaban": answer,
-                    "Analisis": ai_feedback,
-                    "Nilai": nilai
-                })
-
-                st.subheader("💬 Hasil Analisis AI")
-                st.write(ai_feedback)
             else:
-                st.warning("Isi nama dan jawaban terlebih dahulu!")
+                with st.spinner("Menghasilkan LKPD..."):
+                    data, dbg = generate_lkpd(tema)
+                    if data:
+                        lkpd_id = str(uuid.uuid4())[:8]
+                        save_json(LKPD_DIR, lkpd_id, data)
+                        st.success(f"✅ LKPD berhasil dibuat (ID: {lkpd_id})")
+                        st.json(data)
+                        st.download_button(
+                            "📥 Unduh LKPD (JSON)",
+                            json.dumps(data, ensure_ascii=False, indent=2),
+                            file_name=f"LKPD_{lkpd_id}.json"
+                        )
+                    else:
+                        st.error("Gagal membuat LKPD.")
+                        st.json(dbg)
 
-# ====== MODE REKAP ======
-elif menu == "📊 Rekapan Nilai":
-    st.header("📊 Rekapan Nilai & Analisis Pemahaman")
+    # ---------- PANTAU JAWABAN ----------
+    with tab_monitor:
+        st.subheader("Pantau Jawaban Siswa")
+        lkpd_id = st.text_input("Masukkan ID LKPD yang ingin dipantau")
+        if lkpd_id:
+            lkpd = load_json(LKPD_DIR, lkpd_id)
+            if not lkpd:
+                st.error("LKPD tidak ditemukan.")
+            else:
+                answers = load_json(ANSWERS_DIR, lkpd_id) or {}
+                if not answers:
+                    st.info("Belum ada jawaban siswa.")
+                else:
+                    rekap = []
+                    for nama, record in answers.items():
+                        st.markdown(f"### 🧑‍🎓 {nama}")
+                        total_score = 0
+                        count = 0
+                        for idx, q in enumerate(record.get("jawaban", []), 1):
+                            st.markdown(f"{idx}. **{q.get('pertanyaan')}**")
+                            st.write(q.get("jawaban"))
+                            ai_eval = analyze_answer_with_ai(q.get("jawaban"))
+                            score = ai_eval.get("score", 0)
+                            fb = ai_eval.get("feedback", "")
+                            total_score += score
+                            count += 1
+                            st.info(f"💡 Feedback AI: {fb} (Skor: {score})")
+                        avg = round(total_score / count, 2) if count else 0
+                        rekap.append({
+                            "Nama": nama,
+                            "Rata-rata Skor": avg,
+                            "Analisis AI": "Pemahaman tinggi" if avg > 80 else
+                                           "Cukup baik" if avg >= 60 else
+                                           "Perlu bimbingan"
+                        })
+                        st.divider()
 
-    if len(st.session_state.answers) == 0:
-        st.info("Belum ada data siswa.")
-    else:
-        df = pd.DataFrame(st.session_state.answers)
-        st.dataframe(df, use_container_width=True)
+                    # Tabel Rekap
+                    st.markdown("## 📊 Rekapan Nilai Siswa")
+                    df = pd.DataFrame(rekap)
+                    st.dataframe(df, width='stretch')
 
-        if st.session_state.rekap_done:
-            st.markdown("### 🧩 Analisis Umum Kelas telah tersedia di Mode Guru.")
+                    # Ekspor Excel
+                    buffer = io.BytesIO()
+                    df.to_excel(buffer, index=False, engine='openpyxl')
+                    buffer.seek(0)
+                    st.download_button(
+                        "📤 Ekspor Rekapan ke Excel",
+                        data=buffer,
+                        file_name=f"rekapan_{lkpd_id}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
+# =========================================================
+# MODE SISWA
+# =========================================================
+else:
+    st.header("👩🎓 Mode Siswa — Kerjakan LKPD")
+    lkpd_id = st.text_input("Masukkan ID LKPD yang diberikan guru")
+    nama = st.text_input("Nama lengkap")
+    if lkpd_id and nama:
+        lkpd = load_json(LKPD_DIR, lkpd_id)
+        if not lkpd:
+            st.error("LKPD tidak ditemukan.")
         else:
-            st.info("Analisis umum kelas belum dilakukan oleh guru.")
+            st.success(f"LKPD: {lkpd.get('judul', 'Tanpa Judul')}")
+            card("🎯 Tujuan Pembelajaran", "<br>".join(lkpd.get("tujuan_pembelajaran", [])), "#eef2ff")
+            card("📚 Materi Singkat", lkpd.get("materi_singkat", "(Belum ada materi)"), "#f0fdf4")
+
+            jawaban_list = []
+            for i, kegiatan in enumerate(lkpd.get("kegiatan", []), 1):
+                with st.expander(f"Kegiatan {i}: {kegiatan.get('nama','')}"):
+                    st.write(kegiatan.get("petunjuk", ""))
+                    for j, q in enumerate(kegiatan.get("pertanyaan_pemantik", []), 1):
+                        ans = st.text_area(f"{i}.{j} {q.get('pertanyaan')}", key=f"{lkpd_id}_{nama}_{i}_{j}", height=120)
+                        jawaban_list.append({"pertanyaan": q.get("pertanyaan"), "jawaban": ans})
+
+            if st.button("📤 Submit Jawaban"):
+                existing = load_json(ANSWERS_DIR, lkpd_id) or {}
+                existing[nama] = {
+                    "jawaban": jawaban_list,
+                    "submitted_at": str(__import__('datetime').datetime.now())
+                }
+                save_json(ANSWERS_DIR, lkpd_id, existing)
+                st.success("✅ Jawaban terkirim! Guru akan menilai dari sistem.")
+    else:
+        st.info("Masukkan ID LKPD dan nama untuk mulai mengerjakan.")

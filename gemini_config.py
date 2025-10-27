@@ -85,6 +85,7 @@ def list_available_models() -> Dict[str, Any]:
 
 
 # ------------------ LKPD Generator ------------------
+
 def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     debug = {"chosen_model": _CHOSEN_MODEL_NAME}
     model = get_model()
@@ -92,77 +93,95 @@ def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, An
         debug["error"] = "Model not initialized"
         return None, debug
 
+    # Prompt baru: format Pembelajaran Mendalam (Teoritis Tanpa Perhitungan)
     prompt = f"""
-    Buatkan LKPD pembelajaran mendalam dengan tema: "{theme}".
-    LKPD harus terdiri dari tiga tahap utama: Memahami, Mengaplikasikan, dan Merefleksi.
-    Setiap tahap harus memiliki kegiatan, petunjuk, dan pertanyaan pemantik.
-    Format keluaran HARUS JSON valid seperti ini:
+    Buatkan saya Lembar Kerja Peserta Didik (LKPD) untuk materi: {theme}.
+
+    LKPD harus menggunakan format Pembelajaran Mendalam (Teoritis Tanpa Perhitungan),
+    dengan struktur dan format JSON seperti ini:
 
     {{
-      "judul": "Judul LKPD",
-      "tujuan_pembelajaran": ["Tujuan 1", "Tujuan 2"],
-      "materi_singkat": "Ringkasan singkat konsep utama dalam 3–5 kalimat.",
-      "tahapan": [
+      "judul": "LKPD Pembelajaran Mendalam: Memahami {theme}",
+      "tujuan_pembelajaran": [
+        "Tujuan 1 (kualitatif dan konseptual)",
+        "Tujuan 2",
+        "Tujuan 3"
+      ],
+      "materi_singkat": "Penjelasan konsep inti secara naratif, tanpa rumus atau perhitungan.",
+      "tahapan_pembelajaran": [
         {{
-          "nama_tahap": "Memahami",
-          "deskripsi": "Penjelasan tahap memahami.",
-          "kegiatan": [
+          "tahap": "Memahami",
+          "deskripsi_tujuan": "Menelusuri konsep dasar dan makna utama dari materi.",
+          "bagian_inti": "Penjelasan inti dari konsep.",
+          "petunjuk": "Petunjuk singkat tentang apa yang harus dipahami siswa.",
+          "pertanyaan_pemantik": [
+            {{"pertanyaan": "Apa konsep utama dari {theme}?"}},
+            {{"pertanyaan": "Mengapa konsep ini penting dalam kehidupan sehari-hari?"}},
+            {{"pertanyaan": "Bagaimana kamu menjelaskan konsep ini dengan bahasa sederhana?"}}
+          ]
+        }},
+        {{
+          "tahap": "Mengaplikasikan",
+          "deskripsi_tujuan": "Menerapkan konsep dalam konteks hipotetis atau percobaan pikiran.",
+          "bagian_inti": "Skenario hipotetis untuk menguji pemahaman siswa.",
+          "petunjuk": "Analisis setiap skenario secara konseptual tanpa perhitungan angka.",
+          "skenario": [
             {{
-              "nama": "Nama kegiatan memahami",
-              "petunjuk": "Langkah kegiatan memahami.",
-              "pertanyaan_pemantik": [
-                {{"pertanyaan": "Pertanyaan 1"}},
-                {{"pertanyaan": "Pertanyaan 2"}}
-              ]
+              "judul": "Skenario 1",
+              "deskripsi": "Deskripsikan situasi hipotetis yang relevan dengan {theme}.",
+              "pertanyaan": "Bagaimana konsep ini menjelaskan fenomena tersebut?"
+            }},
+            {{
+              "judul": "Skenario 2",
+              "deskripsi": "Skenario hipotetis lain yang menantang pemahaman konsep.",
+              "pertanyaan": "Apa hubungan antara konsep dan hasil yang terjadi?"
+            }},
+            {{
+              "judul": "Skenario 3",
+              "deskripsi": "Skenario reflektif yang melibatkan penerapan konsep pada konteks baru.",
+              "pertanyaan": "Bagaimana kamu akan memecahkan masalah ini dengan konsep {theme}?"
             }}
           ]
         }},
         {{
-          "nama_tahap": "Mengaplikasikan",
-          "deskripsi": "Penjelasan tahap mengaplikasikan.",
-          "kegiatan": [
-            {{
-              "nama": "Nama kegiatan mengaplikasikan",
-              "petunjuk": "Langkah kegiatan mengaplikasikan.",
-              "pertanyaan_pemantik": [
-                {{"pertanyaan": "Pertanyaan 1"}},
-                {{"pertanyaan": "Pertanyaan 2"}}
-              ]
-            }}
-          ]
-        }},
-        {{
-          "nama_tahap": "Merefleksi",
-          "deskripsi": "Penjelasan tahap merefleksi.",
-          "kegiatan": [
-            {{
-              "nama": "Nama kegiatan merefleksi",
-              "petunjuk": "Langkah kegiatan merefleksi.",
-              "pertanyaan_pemantik": [
-                {{"pertanyaan": "Pertanyaan 1"}},
-                {{"pertanyaan": "Pertanyaan 2"}}
-              ]
-            }}
+          "tahap": "Merefleksi",
+          "deskripsi_tujuan": "Mengajak siswa merenungkan pemahaman dan penerapan konsep.",
+          "bagian_inti": "Refleksi konseptual terhadap makna dan implikasi materi.",
+          "petunjuk": "Jawablah dengan jujur berdasarkan pemahaman pribadi.",
+          "pertanyaan_pemantik": [
+            {{"pertanyaan": "Apa yang kamu pelajari dari proses memahami konsep ini?"}},
+            {{"pertanyaan": "Bagaimana penerapan konsep ini dapat mengubah cara pandangmu?"}},
+            {{"pertanyaan": "Bagian mana dari materi ini yang paling bermakna bagimu?"}}
           ]
         }}
-      ]
+      ],
+      "jawaban_benar": ["Contoh jawaban umum yang menunjukkan pemahaman konseptual."],
+      "format_akhir": "Jawaban Siswa (Nama Siswa: …)"
     }}
+
+    Pastikan semua pertanyaan dan skenario bersifat kualitatif dan konseptual (tanpa perhitungan angka).
+    Hasilkan HANYA JSON valid sesuai format di atas, tanpa tambahan teks lain.
     """
 
     attempt = 0
+    last_raw = None
     while attempt <= max_retry:
         try:
             response = model.generate_content(prompt)
             raw = getattr(response, "text", str(response))
             debug["raw_response"] = raw[:5000]
             json_block = _extract_json_from_text(raw)
+            if not json_block:
+                raise ValueError("Tidak ditemukan blok JSON")
+
             data = json.loads(json_block)
             return data, debug
         except Exception as e:
-            debug.setdefault("errors", []).append(str(e))
+            debug.setdefault("attempts", []).append(f"{type(e).__name__}: {e}")
             attempt += 1
             time.sleep(0.5)
             if attempt > max_retry:
+                debug["last_raw"] = last_raw
                 return None, debug
 
 

@@ -6,17 +6,20 @@ import re
 import pandas as pd
 from gemini_config import (
     init_model, list_available_models, generate_lkpd,
-    analyze_answer_with_ai, save_json, load_json, LKPD_DIR, ANSWERS_DIR
+    analyze_answer_with_ai, analyze_cognitive_profile, save_json, load_json, LKPD_DIR, ANSWERS_DIR
 )
 
 # ------------------ Setup ------------------
 st.set_page_config(page_title="EduAI LKPD Modern", layout="wide", page_icon="🎓")
 
+
 def sanitize_id(s: str) -> str:
     return re.sub(r"[^\w-]", "_", s.strip())[:64]
 
+
 os.makedirs(LKPD_DIR, exist_ok=True)
 os.makedirs(ANSWERS_DIR, exist_ok=True)
+
 
 def card(title: str, content: str, color: str = "#f9fafb"):
     st.markdown(
@@ -29,6 +32,7 @@ def card(title: str, content: str, color: str = "#f9fafb"):
         """,
         unsafe_allow_html=True,
     )
+
 
 # ------------------ Init Model ------------------
 st.title("EduAI — LKPD Pembelajaran Mendalam")
@@ -63,12 +67,80 @@ if role == "👨🏫 Guru":
     # ---------- BUAT LKPD ----------
     with tab_create:
         tema = st.text_input("Tema / Topik Pembelajaran")
+
+        # ---------------- Cognitive Assessment Form ----------------
+        st.markdown("#### 🧭 Asesmen Kognitif Siswa")
+        st.caption("Jawab beberapa pertanyaan singkat untuk membantu AI memahami tingkat kognitif target siswa (C1–C6 Bloom).")
+
+        # Store choices in session_state to preserve values across interactions
+        if "cog_q" not in st.session_state:
+            st.session_state.cog_q = {}
+
+        q1 = st.radio(
+            "1️⃣ Sejauh mana siswa sudah mengenal konsep dasar tema ini?",
+            ["Belum mengenal", "Mulai memahami", "Sudah cukup paham"],
+            horizontal=True,
+            key="cog_q1"
+        )
+        q2 = st.radio(
+            "2️⃣ Apakah siswa mampu menerapkan konsep dalam contoh sederhana?",
+            ["Belum", "Sebagian", "Ya, sudah bisa"],
+            horizontal=True,
+            key="cog_q2"
+        )
+        q3 = st.radio(
+            "3️⃣ Apakah siswa biasa diajak berpikir analitis (membandingkan, menghubungkan)?",
+            ["Jarang", "Kadang-kadang", "Sering"],
+            horizontal=True,
+            key="cog_q3"
+        )
+        q4 = st.radio(
+            "4️⃣ Apakah siswa sudah mampu mengevaluasi pendapat atau situasi tertentu?",
+            ["Belum", "Mulai mampu", "Sudah sering"],
+            horizontal=True,
+            key="cog_q4"
+        )
+        q5 = st.radio(
+            "5️⃣ Apakah siswa pernah diajak membuat karya/pemecahan baru dari konsep ini?",
+            ["Belum pernah", "Kadang", "Sering"],
+            horizontal=True,
+            key="cog_q5"
+        )
+
+        # Pack responses as a simple mapping
+        cog_responses = {
+            "Q1": q1,
+            "Q2": q2,
+            "Q3": q3,
+            "Q4": q4,
+            "Q5": q5,
+        }
+
+        col_a, col_b = st.columns([1, 1])
+        with col_a:
+            if st.button("🔍 Analisis Profil Kognitif"):
+                with st.spinner("Menganalisis tingkat kognitif siswa..."):
+                    try:
+                        cog_profile = analyze_cognitive_profile(cog_responses)
+                    except Exception as e:
+                        cog_profile = {"level": "C3", "analysis": f"Analisis gagal: {e}"}
+
+                    level = cog_profile.get("level", "C3")
+                    st.session_state["cog_level"] = level
+                    st.success(f"Tingkat Kognitif Dominan: {level} — {cog_profile.get('analysis')}")
+        with col_b:
+            st.markdown("_Atau biarkan aplikasi menggunakan level default (C3) jika belum dianalisis._")
+
+        st.markdown("---")
+
+        # Generate LKPD button (uses cognitive level if set)
         if st.button("Generate LKPD (AI)"):
             if not tema.strip():
                 st.warning("Masukkan tema terlebih dahulu.")
             else:
-                with st.spinner("Menghasilkan LKPD (format pembelajaran mendalam)..."):
-                    data, dbg = generate_lkpd(tema)
+                level = st.session_state.get("cog_level", "C3")
+                with st.spinner(f"Menghasilkan LKPD untuk tingkat kognitif {level}..."):
+                    data, dbg = generate_lkpd(tema, cognitive_level=level)
                     if data:
                         lkpd_id = str(uuid.uuid4())[:8]
                         save_json(LKPD_DIR, lkpd_id, data)
@@ -141,7 +213,7 @@ if role == "👨🏫 Guru":
                         rekap.append({
                             "Nama": nama,
                             "Rata-rata Skor": avg,
-                            "Analisis AI": (
+                                "Analisis AI": (
                                 "Pemahaman tinggi" if avg > 80 else
                                 "Cukup baik" if avg >= 60 else
                                 "Perlu bimbingan"
@@ -189,7 +261,7 @@ else:
                         # Jika ada skenario (khusus tahap Mengaplikasikan)
                         for j, s in enumerate(tahap.get("skenario", []), 1):
                             st.markdown(f"**Skenario {j}: {s.get('judul','')}**")
-                            st.write(s.get("deskripsi", ""))
+                            st.write(s.get('deskripsi', ""))
                             ans = st.text_area(f"Analisis Skenario {j}: {s.get('pertanyaan')}", key=f"{lkpd_id}_{nama}_{i}_s{j}", height=120)
                             jawaban_list.append({"pertanyaan": s.get("pertanyaan"), "jawaban": ans})
             else:

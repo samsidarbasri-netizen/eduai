@@ -1,11 +1,10 @@
 """
-gemini_config.py — FINAL COMPLETE FIXED VERSION (with Difficulty Level)
+gemini_config.py — FINAL COMPLETE FIXED VERSION
 -----------------------------------------------------
 ✅ Format Pembelajaran Mendalam (Memahami – Mengaplikasikan – Merefleksi)
 ✅ LKPD hanya berupa teks konseptual — tanpa grafik, tabel, diagram, atau gambar
 ✅ Skor otomatis 0 + feedback “Siswa tidak menjawab.”
 ✅ Kompatibel penuh dengan app.py (parameter question, student_answer, lkpd_context)
-✅ Tambahan: tingkat kesulitan (mudah / sedang / sulit)
 """
 
 import os
@@ -28,7 +27,9 @@ def _extract_json_from_text(text: str) -> Optional[str]:
     """Ambil blok JSON dari teks mentah hasil model Gemini."""
     if not text:
         return None
+    # Menghapus blok kode Markdown
     cleaned = text.replace("```json", "").replace("```", "").strip()
+    # Mencari pola JSON yang valid
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     return match.group(0) if match else cleaned
 
@@ -43,6 +44,8 @@ def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
             return False, "API key kosong atau tidak valid.", debug
 
         genai.configure(api_key=api_key)
+        
+        # Daftar model yang diutamakan
         candidates = [
             "models/gemini-2.5-flash",
             "gemini-2.5-flash",
@@ -50,7 +53,9 @@ def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
             "gemini-1.5-flash",
         ]
         chosen = None
+        
         try:
+            # Cek model yang tersedia
             models = genai.list_models()
             names = [m.name for m in models]
             for c in candidates:
@@ -58,6 +63,7 @@ def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
                     chosen = c
                     break
         except Exception:
+            # Fallback jika list_models gagal (misal: karena koneksi)
             chosen = "gemini-1.5-flash"
 
         _MODEL = genai.GenerativeModel(chosen)
@@ -84,66 +90,64 @@ def list_available_models() -> Dict[str, Any]:
 
 
 # ------------------ LKPD Generator ------------------
-def generate_lkpd(theme: str, difficulty: str = "Sedang", max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     """
     Menghasilkan LKPD format Pembelajaran Mendalam (Teoritis Tanpa Perhitungan)
     Struktur 3 tahap: Memahami – Mengaplikasikan – Merefleksi
-    Tambahan: parameter tingkat kesulitan (mudah/sedang/sulit)
+    Tidak boleh mengandung gambar, grafik, tabel, diagram, atau visual apapun.
     """
-    debug = {"chosen_model": _CHOSEN_MODEL_NAME, "difficulty": difficulty}
+    debug = {"chosen_model": _CHOSEN_MODEL_NAME}
     model = get_model()
     if not model:
         debug["error"] = "Model not initialized"
         return None, debug
 
-    # Penjelasan kesulitan untuk konteks prompt
-    difficulty_expl = {
-        "Mudah": "Gunakan pertanyaan faktual dan pemahaman konsep dasar. Fokus membantu siswa memahami ide utama dengan contoh sederhana.",
-        "Sedang": "Gunakan pertanyaan aplikatif dan analitis ringan. Fokus pada penerapan konsep dan penghubungan teori dengan realitas sosial.",
-        "Sulit": "Gunakan pertanyaan analitis mendalam dan reflektif. Fokus pada evaluasi kritis dan pemikiran tingkat tinggi (HOTS)."
-    }
-
-    level_desc = difficulty_expl.get(difficulty.capitalize(), difficulty_expl["Sedang"])
-
     prompt = f"""
-    Buatkan Lembar Kerja Peserta Didik (LKPD) untuk materi: "{theme}".
+    Buatkan saya Lembar Kerja Peserta Didik (LKPD) untuk materi: {theme}.
 
-    LKPD harus menggunakan format Pembelajaran Mendalam dengan 3 tahap utama:
-    1. Memahami
-    2. Mengaplikasikan
-    3. Merefleksi
-
-    LKPD hanya berupa teks konseptual — tanpa grafik, tabel, diagram, atau gambar.
-
-    Tingkat kesulitan yang digunakan: {difficulty.upper()}
-    Penjelasan tingkat kesulitan: {level_desc}
-
-    Format JSON yang harus dihasilkan:
+    LKPD harus menggunakan format Pembelajaran Mendalam (Teoritis Tanpa Perhitungan),
+    dengan struktur JSON seperti berikut:
     {{
-      "judul": "LKPD Pembelajaran Mendalam: {theme}",
-      "tujuan_pembelajaran": [...],
+      "judul": "LKPD Pembelajaran Mendalam: Memahami {theme}",
+      "tujuan_pembelajaran": ["...", "...", "..."],
       "materi_singkat": "...",
       "tahapan_pembelajaran": [
         {{
-          "tahap": "Memahami",
-          "pertanyaan": "..."
+          "tahap": "Memahami Konsep Dasar",
+          "deskripsi_tujuan": "...",
+          "bagian_inti": "...",
+          "petunjuk": "...",
+          "pertanyaan_pemantik": [{{ "pertanyaan": "..." }}]
         }},
         {{
-          "tahap": "Mengaplikasikan",
-          "pertanyaan": "..."
+          "tahap": "Mengaplikasikan dan Menganalisis",
+          "deskripsi_tujuan": "...",
+          "bagian_inti": "...",
+          "petunjuk": "...",
+          "skenario": [
+            {{
+              "judul": "Skenario Kasus 1: ...",
+              "deskripsi": "...",
+              "pertanyaan": "Analisis skenario ini dan jelaskan konsep X"
+            }}
+          ]
         }},
         {{
-          "tahap": "Merefleksi",
-          "pertanyaan": "..."
+          "tahap": "Merefleksi dan Menarik Kesimpulan",
+          "deskripsi_tujuan": "...",
+          "bagian_inti": "...",
+          "petunjuk": "...",
+          "pertanyaan_pemantik": [{{ "pertanyaan": "Refleksikan pemahaman Anda..." }}]
         }}
       ],
-      "jawaban_benar": ["Contoh jawaban konseptual"],
+      "jawaban_benar": ["Contoh jawaban umum yang menunjukkan pemahaman konseptual."],
       "format_akhir": "Jawaban Siswa (Nama Siswa: …)"
     }}
 
-    ⚠️ Catatan penting:
-    - Gunakan gaya bahasa naratif, reflektif, dan komunikatif.
-    - Pastikan JSON valid tanpa tambahan teks di luar format.
+    ⚠️ Catatan:
+    - Gunakan teks naratif dan reflektif.
+    - Tidak boleh ada grafik, tabel, diagram, gambar, atau visual.
+    - Hasilkan **hanya** JSON valid sesuai format di atas.
     """
 
     attempt = 0
@@ -152,11 +156,14 @@ def generate_lkpd(theme: str, difficulty: str = "Sedang", max_retry: int = 1) ->
             response = model.generate_content(prompt)
             raw = getattr(response, "text", str(response))
             debug["raw_response"] = raw[:4000]
+            
             json_block = _extract_json_from_text(raw)
             if not json_block:
                 raise ValueError("Tidak ditemukan blok JSON")
+            
             data = json.loads(json_block)
             return data, debug
+        
         except Exception as e:
             debug.setdefault("attempts", []).append(f"{type(e).__name__}: {e}")
             attempt += 1
@@ -175,7 +182,7 @@ def analyze_answer_with_ai(question=None, student_answer=None, lkpd_context=None
     if not model:
         return {"score": 0, "feedback": "Model belum siap."}
 
-    # Backward compatibility
+    # Backward compatibility for positional arguments
     if question is None and len(args) > 0:
         question = args[0]
     if student_answer is None and len(args) > 1:
@@ -189,7 +196,7 @@ def analyze_answer_with_ai(question=None, student_answer=None, lkpd_context=None
     prompt = f"""
     Anda adalah sistem penilai otomatis berbasis AI.
 
-    Konteks LKPD:
+    Konteks LKPD (untuk referensi materi dan tujuan):
     {lkpd_context}
 
     Pertanyaan:
@@ -199,33 +206,37 @@ def analyze_answer_with_ai(question=None, student_answer=None, lkpd_context=None
     {student_answer}
 
     Instruksi:
-    1️⃣ Berikan skor objektif (0–100) berdasarkan ketepatan konsep dan kedalaman pemahaman.
+    1️⃣ Berikan skor objektif **integer** (0–100) berdasarkan ketepatan konsep dan kedalaman pemahaman.
     2️⃣ Berikan umpan balik singkat dan spesifik.
     
-    Format output HARUS:
-    SKOR: [angka]
-    FEEDBACK: [teks]
+    Format output HARUS persis seperti ini:
+    SKOR: [angka integer 0-100]
+    FEEDBACK: [teks umpan balik spesifik]
     """
 
     try:
         resp = model.generate_content(prompt)
         text = getattr(resp, "text", str(resp)) or ""
         score = 0
-        feedback = "Siswa tidak menjawab."
+        feedback = "Gagal memproses feedback dari AI."
 
+        # Ekstraksi Skor
         if "SKOR:" in text:
             try:
                 score_line = text.split("SKOR:")[1].split("\n")[0].strip()
+                # Hanya ambil angka dari baris skor
                 score = int(''.join(c for c in score_line if c.isdigit()) or "0")
             except:
                 score = 0
 
+        # Ekstraksi Feedback
         if "FEEDBACK:" in text:
             feedback = text.split("FEEDBACK:")[1].strip()
 
         return {"score": score, "feedback": feedback}
+    
     except Exception as e:
-        return {"score": 0, "feedback": f"Analisis gagal: {e}"}
+        return {"score": 0, "feedback": f"Analisis gagal karena kesalahan AI: {e}"}
 
 
 # ------------------ File Helpers ------------------
@@ -240,6 +251,10 @@ def load_json(folder: str, file_id: str):
     """Membaca file JSON bila tersedia."""
     path = os.path.join(folder, f"{file_id}.json")
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            print(f"Error decoding JSON from {path}")
+            return None
     return None

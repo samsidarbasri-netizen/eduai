@@ -1,3 +1,12 @@
+"""
+gemini_config.py — FINAL CLEAN TEXT VERSION
+-----------------------------------------------------
+✅ Format Pembelajaran Mendalam (Memahami – Mengaplikasikan – Merefleksi)
+✅ LKPD hanya berupa teks konseptual — tanpa grafik, tabel, diagram, atau gambar
+✅ Skor otomatis 0 + feedback “Siswa tidak menjawab.”
+✅ Aman & kompatibel penuh dengan app.py
+"""
+
 import os
 import json
 import re
@@ -19,7 +28,6 @@ def _extract_json_from_text(text: str) -> Optional[str]:
     if not text:
         return None
     cleaned = text.replace("```json", "").replace("```", "").strip()
-    # Mencari blok JSON yang diawali dengan '{' dan diakhiri dengan '}'
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     return match.group(0) if match else cleaned
 
@@ -34,12 +42,13 @@ def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
             return False, "API key kosong atau tidak valid.", debug
 
         genai.configure(api_key=api_key)
-        # Prioritas model untuk kecepatan dan kemampuan JSON
         candidates = [
+            "models/gemini-2.5-flash",
             "gemini-2.5-flash",
+            "models/gemini-1.5-flash",
             "gemini-1.5-flash",
         ]
-        chosen = "gemini-1.5-flash" # Default fallback
+        chosen = None
         try:
             models = genai.list_models()
             names = [m.name for m in models]
@@ -48,7 +57,7 @@ def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
                     chosen = c
                     break
         except Exception:
-            pass # Lanjut menggunakan fallback
+            chosen = "gemini-1.5-flash"
 
         _MODEL = genai.GenerativeModel(chosen)
         _CHOSEN_MODEL_NAME = chosen
@@ -74,10 +83,11 @@ def list_available_models() -> Dict[str, Any]:
 
 
 # ------------------ LKPD Generator ------------------
-def generate_lkpd(theme: str, readiness_instruction: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     """
-    Menghasilkan LKPD format Pembelajaran Mendalam, menyesuaikan materi
-    berdasarkan tema dan instruksi kesiapan (readiness_instruction).
+    Menghasilkan LKPD format Pembelajaran Mendalam (Teoritis Tanpa Perhitungan)
+    Struktur 3 tahap: Memahami – Mengaplikasikan – Merefleksi
+    Tidak boleh mengandung gambar, grafik, tabel, diagram, atau visual apapun.
     """
     debug = {"chosen_model": _CHOSEN_MODEL_NAME}
     model = get_model()
@@ -85,26 +95,12 @@ def generate_lkpd(theme: str, readiness_instruction: str, max_retry: int = 1) ->
         debug["error"] = "Model not initialized"
         return None, debug
 
-    # Prompt yang diperbarui
+    # Prompt revisi sesuai permintaan
     prompt = f"""
     Buatkan saya Lembar Kerja Peserta Didik (LKPD) untuk materi: {theme}.
 
-    Instruksi Kesiapan Siswa (Readiness Level): **{readiness_instruction}**.
-    
-    Tugas utama Anda terbagi dua:
-    1.  **PENYESUAIAN MATERI AWAL (Kesiapan):** Anda harus menyesuaikan kedalaman, detail, dan tingkat scaffolding pada bagian "materi_singkat" di tahap 'Memahami' LKPD agar sesuai dengan instruksi kesiapan di atas.
-        * Jika kesiapan rendah (Skala 1-2), berikan penjelasan yang sangat rinci dan banyak scaffolding.
-        * Jika kesiapan tinggi (Skala 4-5), berikan ringkasan singkat atau langsung ke konsep kompleks dan detail.
-    
-    2.  **PENYESUAIAN BOBOT PERTANYAAN (Kognitif):** Setiap pertanyaan (baik pemantik maupun skenario) harus memiliki field 'level_kognitif' (dari 1 sampai 5) dan 'bobot' (poin maksimumnya). Gunakan bobot poin tetap berikut berdasarkan level kognitif (Taksonomi Bloom):
-        * **Level 1 (Mengingat):** Bobot 10
-        * **Level 2 (Memahami):** Bobot 15
-        * **Level 3 (Mengaplikasikan):** Bobot 20
-        * **Level 4 (Menganalisis):** Bobot 25
-        * **Level 5 (Mencipta/Evaluasi):** Bobot 30
-
     LKPD harus menggunakan format Pembelajaran Mendalam (Teoritis Tanpa Perhitungan),
-    dengan struktur dan format JSON **yang sama persis dengan contoh berikut**:
+    dengan struktur dan format JSON seperti ini:
 
     {{
       "judul": "LKPD Pembelajaran Mendalam: Memahami {theme}",
@@ -113,16 +109,17 @@ def generate_lkpd(theme: str, readiness_instruction: str, max_retry: int = 1) ->
         "Tujuan 2",
         "Tujuan 3"
       ],
-      "materi_singkat": "Penjelasan konsep inti secara naratif, disesuaikan berdasarkan Kesiapan Siswa, tanpa rumus atau perhitungan.",
+      "materi_singkat": "Penjelasan konsep inti secara naratif, tanpa rumus atau perhitungan.",
       "tahapan_pembelajaran": [
         {{
           "tahap": "Memahami",
           "deskripsi_tujuan": "Menelusuri konsep dasar dan makna utama dari materi.",
-          "bagian_inti": "Penjelasan inti dari konsep, disesuaikan dengan kesiapan siswa.",
+          "bagian_inti": "Penjelasan inti dari konsep.",
           "petunjuk": "Petunjuk singkat tentang apa yang harus dipahami siswa.",
           "pertanyaan_pemantik": [
-            {{"pertanyaan": "Apa konsep utama dari {theme}?", "level_kognitif": 1, "bobot": 10}},
-            {{"pertanyaan": "Mengapa konsep ini penting dalam kehidupan sehari-hari?", "level_kognitif": 2, "bobot": 15}}
+            {{"pertanyaan": "Apa konsep utama dari {theme}?"}},
+            {{"pertanyaan": "Mengapa konsep ini penting dalam kehidupan sehari-hari?"}},
+            {{"pertanyaan": "Bagaimana kamu menjelaskan konsep ini dengan bahasa sederhana?"}}
           ]
         }},
         {{
@@ -134,14 +131,17 @@ def generate_lkpd(theme: str, readiness_instruction: str, max_retry: int = 1) ->
             {{
               "judul": "Skenario 1",
               "deskripsi": "Deskripsikan situasi hipotetis yang relevan dengan {theme}.",
-              "pertanyaan": "Bagaimana konsep ini menjelaskan fenomena tersebut?",
-              "level_kognitif": 3, "bobot": 20
+              "pertanyaan": "Bagaimana konsep ini menjelaskan fenomena tersebut?"
             }},
             {{
               "judul": "Skenario 2",
               "deskripsi": "Skenario hipotetis lain yang menantang pemahaman konsep.",
-              "pertanyaan": "Apa hubungan antara konsep dan hasil yang terjadi?",
-              "level_kognitif": 4, "bobot": 25
+              "pertanyaan": "Apa hubungan antara konsep dan hasil yang terjadi?"
+            }},
+            {{
+              "judul": "Skenario 3",
+              "deskripsi": "Skenario reflektif yang melibatkan penerapan konsep pada konteks baru.",
+              "pertanyaan": "Bagaimana kamu akan memecahkan masalah ini dengan konsep {theme}?"
             }}
           ]
         }},
@@ -151,7 +151,9 @@ def generate_lkpd(theme: str, readiness_instruction: str, max_retry: int = 1) ->
           "bagian_inti": "Refleksi konseptual terhadap makna dan implikasi materi.",
           "petunjuk": "Jawablah dengan jujur berdasarkan pemahaman pribadi.",
           "pertanyaan_pemantik": [
-            {{"pertanyaan": "Bagaimana penerapan konsep ini dapat mengubah cara pandangmu?", "level_kognitif": 5, "bobot": 30}}
+            {{"pertanyaan": "Apa yang kamu pelajari dari proses memahami konsep ini?"}},
+            {{"pertanyaan": "Bagaimana penerapan konsep ini dapat mengubah cara pandangmu?"}},
+            {{"pertanyaan": "Bagian mana dari materi ini yang paling bermakna bagimu?"}}
           ]
         }}
       ],
@@ -160,9 +162,10 @@ def generate_lkpd(theme: str, readiness_instruction: str, max_retry: int = 1) ->
     }}
 
     ⚠️ Catatan penting:
-    - Hasilkan HANYA JSON valid sesuai format di atas (tanpa tambahan teks lain).
+    - Hanya gunakan teks naratif dan pertanyaan reflektif.
     - Jangan membuat atau menyebut grafik, diagram, tabel, gambar, atau bentuk visual lainnya.
     - Semua penjelasan dan pertanyaan harus bersifat konseptual dan kualitatif, tanpa angka atau rumus.
+    - Hasilkan HANYA JSON valid sesuai format di atas (tanpa tambahan teks lain).
     """
 
     attempt = 0
@@ -186,54 +189,38 @@ def generate_lkpd(theme: str, readiness_instruction: str, max_retry: int = 1) ->
 
 
 # ------------------ Penilaian Jawaban Siswa ------------------
-def analyze_answer_with_ai(question_data: Dict[str, Any]) -> Dict[str, Any]:
+def analyze_answer_with_ai(answer_text: str) -> Dict[str, Any]:
     """
-    AI memberikan penilaian semi-otomatis (Skor 0-100)
-    dengan konteks pertanyaan dan bobot yang tersedia di question_data.
+    AI memberikan penilaian semi-otomatis:
+    - Skor numerik 0–100
+    - Analisis singkat terhadap pemahaman siswa
+    - Jika jawaban kosong → skor 0, feedback "Siswa tidak menjawab."
     """
     model = get_model()
     if not model:
         return {"score": 0, "feedback": "Model belum siap."}
 
-    question_text = question_data.get("pertanyaan", "")
-    answer_text = question_data.get("jawaban", "")
-    bobot = question_data.get("bobot", 10)
-    level = question_data.get("level_kognitif", 1)
-
     if not answer_text or not answer_text.strip():
         return {"score": 0, "feedback": "Siswa tidak menjawab."}
 
     prompt = f"""
-    Anda adalah seorang penilai ahli. Analisis kualitas jawaban siswa berikut berdasarkan ketepatan konsep dan kedalaman pemahaman.
-    
-    Tingkat Kognitif Pertanyaan: Level {level} (Bobot Maks: {bobot} Poin)
+    Analisis kualitas jawaban siswa berikut berdasarkan ketepatan konsep dan kedalaman pemahaman.
 
-    **Pertanyaan:**
-    \"\"\"{question_text}\"\"\"
+    Jawaban siswa:
+    \"\"\"{answer_text}\"\"\" 
 
-    **Jawaban Siswa:**
-    \"\"\"{answer_text}\"\"\" 
-
-    Berikan skor dalam skala 0–100 (persentase ketepatan) dan analisis singkat.
-    Format output HARUS JSON valid:
+    Berikan skor (0–100) dan analisis singkat.
+    Format output JSON valid:
     {{
-      "score": <angka_integer_0_hingga_100>,
-      "feedback": "<analisis singkat dan konstruktif, kurang dari 20 kata>"
+      "score": <angka>,
+      "feedback": "<analisis singkat>"
     }}
     """
     try:
         resp = model.generate_content(prompt)
         text = getattr(resp, "text", str(resp))
         js = _extract_json_from_text(text)
-        
-        try:
-            data = json.loads(js)
-            # Pastikan score adalah int
-            data["score"] = int(data.get("score", 0))
-            return data
-        except (json.JSONDecodeError, ValueError):
-            return {"score": 0, "feedback": f"Analisis gagal parsing JSON. Jawaban: {js[:50]}..."}
-
+        return json.loads(js)
     except Exception as e:
         return {"score": 0, "feedback": f"Analisis gagal: {e}"}
 

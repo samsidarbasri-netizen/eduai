@@ -19,6 +19,7 @@ def _extract_json_from_text(text: str) -> Optional[str]:
     if not text:
         return None
     cleaned = text.replace("```json", "").replace("```", "").strip()
+    # Mencari blok JSON yang diawali dengan '{' dan diakhiri dengan '}'
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     return match.group(0) if match else cleaned
 
@@ -33,13 +34,12 @@ def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
             return False, "API key kosong atau tidak valid.", debug
 
         genai.configure(api_key=api_key)
+        # Prioritas model untuk kecepatan dan kemampuan JSON
         candidates = [
-            "models/gemini-2.5-flash",
             "gemini-2.5-flash",
-            "models/gemini-1.5-flash",
             "gemini-1.5-flash",
         ]
-        chosen = None
+        chosen = "gemini-1.5-flash" # Default fallback
         try:
             models = genai.list_models()
             names = [m.name for m in models]
@@ -48,7 +48,7 @@ def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
                     chosen = c
                     break
         except Exception:
-            chosen = "gemini-1.5-flash"
+            pass # Lanjut menggunakan fallback
 
         _MODEL = genai.GenerativeModel(chosen)
         _CHOSEN_MODEL_NAME = chosen
@@ -122,8 +122,7 @@ def generate_lkpd(theme: str, readiness_instruction: str, max_retry: int = 1) ->
           "petunjuk": "Petunjuk singkat tentang apa yang harus dipahami siswa.",
           "pertanyaan_pemantik": [
             {{"pertanyaan": "Apa konsep utama dari {theme}?", "level_kognitif": 1, "bobot": 10}},
-            {{"pertanyaan": "Mengapa konsep ini penting dalam kehidupan sehari-hari?", "level_kognitif": 2, "bobot": 15}},
-            {{"pertanyaan": "Bagaimana kamu menjelaskan konsep ini dengan bahasa sederhana?", "level_kognitif": 2, "bobot": 15}}
+            {{"pertanyaan": "Mengapa konsep ini penting dalam kehidupan sehari-hari?", "level_kognitif": 2, "bobot": 15}}
           ]
         }},
         {{
@@ -143,12 +142,6 @@ def generate_lkpd(theme: str, readiness_instruction: str, max_retry: int = 1) ->
               "deskripsi": "Skenario hipotetis lain yang menantang pemahaman konsep.",
               "pertanyaan": "Apa hubungan antara konsep dan hasil yang terjadi?",
               "level_kognitif": 4, "bobot": 25
-            }},
-            {{
-              "judul": "Skenario 3",
-              "deskripsi": "Skenario reflektif yang melibatkan penerapan konsep pada konteks baru.",
-              "pertanyaan": "Bagaimana kamu akan memecahkan masalah ini dengan konsep {theme}?",
-              "level_kognitif": 4, "bobot": 25
             }}
           ]
         }},
@@ -158,9 +151,7 @@ def generate_lkpd(theme: str, readiness_instruction: str, max_retry: int = 1) ->
           "bagian_inti": "Refleksi konseptual terhadap makna dan implikasi materi.",
           "petunjuk": "Jawablah dengan jujur berdasarkan pemahaman pribadi.",
           "pertanyaan_pemantik": [
-            {{"pertanyaan": "Apa yang kamu pelajari dari proses memahami konsep ini?", "level_kognitif": 3, "bobot": 20}},
-            {{"pertanyaan": "Bagaimana penerapan konsep ini dapat mengubah cara pandangmu?", "level_kognitif": 5, "bobot": 30}},
-            {{"pertanyaan": "Bagian mana dari materi ini yang paling bermakna bagimu?", "level_kognitif": 5, "bobot": 30}}
+            {{"pertanyaan": "Bagaimana penerapan konsep ini dapat mengubah cara pandangmu?", "level_kognitif": 5, "bobot": 30}}
           ]
         }}
       ],
@@ -169,10 +160,9 @@ def generate_lkpd(theme: str, readiness_instruction: str, max_retry: int = 1) ->
     }}
 
     ⚠️ Catatan penting:
-    - Hanya gunakan teks naratif dan pertanyaan reflektif.
+    - Hasilkan HANYA JSON valid sesuai format di atas (tanpa tambahan teks lain).
     - Jangan membuat atau menyebut grafik, diagram, tabel, gambar, atau bentuk visual lainnya.
     - Semua penjelasan dan pertanyaan harus bersifat konseptual dan kualitatif, tanpa angka atau rumus.
-    - Hasilkan HANYA JSON valid sesuai format di atas (tanpa tambahan teks lain).
     """
 
     attempt = 0

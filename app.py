@@ -5,29 +5,21 @@ import os
 import re
 import pandas as pd
 from gemini_config import (
-    init_model,
-    list_available_models,
-    generate_lkpd,
-    analyze_answer_with_ai,
-    save_json,
-    load_json,
-    LKPD_DIR,
-    ANSWERS_DIR
+    init_model, list_available_models, generate_lkpd,
+    analyze_answer_with_ai, analyze_cognitive_profile, save_json, load_json, LKPD_DIR, ANSWERS_DIR
 )
 
-# ------------------ Setup & Helpers ------------------
-st.set_page_config(
-    page_title="EduAI LKPD Modern",
-    layout="wide",
-    page_icon="🎓"
-)
+# ------------------ Setup ------------------
+st.set_page_config(page_title="EduAI LKPD Modern", layout="wide", page_icon="🎓")
+
 
 def sanitize_id(s: str) -> str:
-    """Hilangkan karakter non-alfanumerik."""
     return re.sub(r"[^\w-]", "_", s.strip())[:64]
+
 
 os.makedirs(LKPD_DIR, exist_ok=True)
 os.makedirs(ANSWERS_DIR, exist_ok=True)
+
 
 def card(title: str, content: str, color: str = "#f9fafb"):
     st.markdown(
@@ -37,16 +29,16 @@ def card(title: str, content: str, color: str = "#f9fafb"):
         <div style='font-weight:600;font-size:17px;margin-bottom:6px;'>{title}</div>
         <div style='font-size:14px;line-height:1.5;'>{content}</div>
         </div>
-        """, unsafe_allow_html=True
+        """,
+        unsafe_allow_html=True,
     )
+
 
 # ------------------ Init Model ------------------
 st.title("EduAI — LKPD Pembelajaran Mendalam")
 st.caption("AI membantu membuat LKPD konseptual dan menganalisis pemahaman siswa secara semi-otomatis.")
 
-# API key
 api_key = st.secrets.get("GEMINI_API_KEY") if "GEMINI_API_KEY" in st.secrets else st.text_input("🔑 Masukkan API Key Gemini")
-
 ok, msg, debug = init_model(api_key)
 if not ok:
     st.error(msg)
@@ -56,9 +48,8 @@ else:
 
 # ------------------ Sidebar ------------------
 st.sidebar.header("Navigasi")
-role = st.sidebar.radio("Pilih Peran", ["👨‍🏫 Guru", "👩‍🎓 Siswa"])
+role = st.sidebar.radio("Pilih Peran", ["👨🏫 Guru", "👩🎓 Siswa"])
 st.sidebar.divider()
-
 if st.sidebar.button("🔎 Tes koneksi (list models)"):
     info = list_available_models()
     if info.get("ok"):
@@ -69,37 +60,87 @@ if st.sidebar.button("🔎 Tes koneksi (list models)"):
 # =========================================================
 # MODE GURU
 # =========================================================
-if role == "👨‍🏫 Guru":
-    st.header("👨‍🏫 Mode Guru — Buat & Pantau LKPD")
-
+if role == "👨🏫 Guru":
+    st.header("👨🏫 Mode Guru — Buat & Pantau LKPD")
     tab_create, tab_monitor = st.tabs(["✏️ Buat LKPD", "📊 Pantau Jawaban"])
 
-    # --- TAB BUAT LKPD ---
+    # ---------- BUAT LKPD ----------
     with tab_create:
         tema = st.text_input("Tema / Topik Pembelajaran")
 
-        st.markdown("### ⚙️ Pilih Tingkat Kesulitan LKPD")
-        tingkat_kesulitan = st.radio(
-            "Pilih tingkat kesulitan:",
-            ["Mudah 🟢", "Sedang 🟡", "Sulit 🔴"],
-            horizontal=True
+        # ---------------- Cognitive Assessment Form ----------------
+        st.markdown("#### 🧭 Asesmen Kognitif Siswa")
+        st.caption("Jawab beberapa pertanyaan singkat untuk membantu AI memahami tingkat kognitif target siswa (C1–C6 Bloom).")
+
+        # Store choices in session_state to preserve values across interactions
+        if "cog_q" not in st.session_state:
+            st.session_state.cog_q = {}
+
+        q1 = st.radio(
+            "1️⃣ Sejauh mana siswa sudah mengenal konsep dasar tema ini?",
+            ["Belum mengenal", "Mulai memahami", "Sudah cukup paham"],
+            horizontal=True,
+            key="cog_q1"
+        )
+        q2 = st.radio(
+            "2️⃣ Apakah siswa mampu menerapkan konsep dalam contoh sederhana?",
+            ["Belum", "Sebagian", "Ya, sudah bisa"],
+            horizontal=True,
+            key="cog_q2"
+        )
+        q3 = st.radio(
+            "3️⃣ Apakah siswa biasa diajak berpikir analitis (membandingkan, menghubungkan)?",
+            ["Jarang", "Kadang-kadang", "Sering"],
+            horizontal=True,
+            key="cog_q3"
+        )
+        q4 = st.radio(
+            "4️⃣ Apakah siswa sudah mampu mengevaluasi pendapat atau situasi tertentu?",
+            ["Belum", "Mulai mampu", "Sudah sering"],
+            horizontal=True,
+            key="cog_q4"
+        )
+        q5 = st.radio(
+            "5️⃣ Apakah siswa pernah diajak membuat karya/pemecahan baru dari konsep ini?",
+            ["Belum pernah", "Kadang", "Sering"],
+            horizontal=True,
+            key="cog_q5"
         )
 
-        st.markdown("""
-        **📘 Definisi Umum Tingkat Kesulitan:**
-        - 🟢 **Mudah**: Pertanyaan bersifat mendasar, menuntun pemahaman konsep dasar.
-        - 🟡 **Sedang**: Pertanyaan memerlukan analisis dan penerapan konsep pada situasi nyata.
-        - 🔴 **Sulit**: Pertanyaan kompleks, menuntut sintesis dan refleksi mendalam antar konsep sosial.
-        """)
+        # Pack responses as a simple mapping
+        cog_responses = {
+            "Q1": q1,
+            "Q2": q2,
+            "Q3": q3,
+            "Q4": q4,
+            "Q5": q5,
+        }
 
+        col_a, col_b = st.columns([1, 1])
+        with col_a:
+            if st.button("🔍 Analisis Profil Kognitif"):
+                with st.spinner("Menganalisis tingkat kognitif siswa..."):
+                    try:
+                        cog_profile = analyze_cognitive_profile(cog_responses)
+                    except Exception as e:
+                        cog_profile = {"level": "C3", "analysis": f"Analisis gagal: {e}"}
+
+                    level = cog_profile.get("level", "C3")
+                    st.session_state["cog_level"] = level
+                    st.success(f"Tingkat Kognitif Dominan: {level} — {cog_profile.get('analysis')}")
+        with col_b:
+            st.markdown("_Atau biarkan aplikasi menggunakan level default (C3) jika belum dianalisis._")
+
+        st.markdown("---")
+
+        # Generate LKPD button (uses cognitive level if set)
         if st.button("Generate LKPD (AI)"):
             if not tema.strip():
-                st.warning("Masukkan **tema** terlebih dahulu.")
+                st.warning("Masukkan tema terlebih dahulu.")
             else:
-                with st.spinner("Menghasilkan LKPD..."):
-                    # Gabungkan tingkat kesulitan ke prompt tema
-                    tema_dengan_tingkat = f"{tema} (Tingkat Kesulitan: {tingkat_kesulitan})"
-                    data, dbg = generate_lkpd(tema_dengan_tingkat)
+                level = st.session_state.get("cog_level", "C3")
+                with st.spinner(f"Menghasilkan LKPD untuk tingkat kognitif {level}..."):
+                    data, dbg = generate_lkpd(tema, cognitive_level=level)
                     if data:
                         lkpd_id = str(uuid.uuid4())[:8]
                         save_json(LKPD_DIR, lkpd_id, data)
@@ -114,7 +155,7 @@ if role == "👨‍🏫 Guru":
                         st.error("Gagal membuat LKPD.")
                         st.json(dbg)
 
-    # --- TAB MONITOR ---
+    # ---------- PANTAU JAWABAN ----------
     with tab_monitor:
         st.subheader("Pantau Jawaban Siswa")
         lkpd_id = st.text_input("Masukkan ID LKPD yang ingin dipantau")
@@ -124,63 +165,64 @@ if role == "👨‍🏫 Guru":
             if not lkpd:
                 st.error("LKPD tidak ditemukan.")
             else:
-                st.success(f"LKPD: **{lkpd.get('judul', 'Tanpa Judul')}**")
                 answers = load_json(ANSWERS_DIR, lkpd_id) or {}
                 if not answers:
                     st.info("Belum ada jawaban siswa.")
                 else:
+                    # 🔘 Pilihan Mode Penilaian
                     mode_penilaian = st.radio(
                         "Pilih Metode Penilaian",
                         ["💡 Penilaian Otomatis (AI)", "✍️ Penilaian Manual (Guru)"],
                         horizontal=True
                     )
-                    st.divider()
+
                     rekap = []
-
                     for nama, record in answers.items():
-                        st.markdown(f"### 🧑‍🎓 {nama}")
-                        total_score, count = 0, 0
-                        for idx, q in enumerate(record.get("jawaban", []), 1):
-                            st.markdown(f"**{idx}. {q.get('pertanyaan')}**")
-                            st.write(f"**Jawaban Siswa:** {q.get('jawaban') or '_(tidak ada jawaban)_'}")
+                        st.markdown(f"### 🧑🎓 {nama}")
+                        total_score = 0
+                        count = 0
 
-                            score, fb = 0, ""
+                        for idx, q in enumerate(record.get("jawaban", []), 1):
+                            st.markdown(f"{idx}. **{q.get('pertanyaan')}**")
+                            st.write(q.get("jawaban") or "_(tidak ada jawaban)_")
+
+                            # === MODE PENILAIAN AI ===
                             if mode_penilaian == "💡 Penilaian Otomatis (AI)":
-                                ai_eval = analyze_answer_with_ai(
-                                    question=q.get("pertanyaan"),
-                                    student_answer=q.get("jawaban"),
-                                    lkpd_context=lkpd
-                                )
+                                ai_eval = analyze_answer_with_ai(q.get("jawaban"))
                                 score = ai_eval.get("score", 0)
                                 fb = ai_eval.get("feedback", "")
-                                st.info(f"💬 Feedback AI: {fb} (Skor: **{score}**)")
+                                st.info(f"💬 Feedback AI: {fb} (Skor: {score})")
+
+                            # === MODE PENILAIAN MANUAL ===
                             else:
                                 score = st.number_input(
-                                    f"Skor untuk pertanyaan {idx} (0–100)",
+                                    f"Masukkan skor untuk pertanyaan {idx}",
                                     min_value=0, max_value=100, value=0,
-                                    key=f"{lkpd_id}_{nama}_{idx}_score"
+                                    key=f"{nama}_{idx}_score"
                                 )
                                 fb = st.text_area(
-                                    f"Catatan Guru untuk pertanyaan {idx}",
-                                    key=f"{lkpd_id}_{nama}_{idx}_fb", height=60
+                                    f"Catatan guru (opsional)",
+                                    key=f"{nama}_{idx}_fb",
+                                    height=60
                                 )
 
                             total_score += score
                             count += 1
-                            st.markdown("---")
 
                         avg = round(total_score / count, 2) if count else 0
                         rekap.append({
                             "Nama": nama,
-                            "Total Pertanyaan": count,
                             "Rata-rata Skor": avg,
-                            "Analisis AI": (
+                                "Analisis AI": (
                                 "Pemahaman tinggi" if avg > 80 else
                                 "Cukup baik" if avg >= 60 else
                                 "Perlu bimbingan"
                             )
                         })
-                    st.markdown("## 📊 Rekapan Nilai")
+                        st.divider()
+
+                    # ===== TABEL REKAP NILAI =====
+                    st.markdown("## 📊 Rekapan Nilai Siswa")
                     df = pd.DataFrame(rekap)
                     st.dataframe(df, use_container_width=True)
 
@@ -188,21 +230,21 @@ if role == "👨‍🏫 Guru":
 # MODE SISWA
 # =========================================================
 else:
-    st.header("👩‍🎓 Mode Siswa — Kerjakan LKPD Pembelajaran Mendalam")
+    st.header("👩🎓 Mode Siswa — Kerjakan LKPD Pembelajaran Mendalam")
     lkpd_id = st.text_input("Masukkan ID LKPD yang diberikan guru")
     nama = st.text_input("Nama lengkap")
-
     if lkpd_id and nama:
-        sanitized_nama = sanitize_id(nama)
         lkpd = load_json(LKPD_DIR, lkpd_id)
         if not lkpd:
             st.error("LKPD tidak ditemukan.")
         else:
-            st.success(f"LKPD: **{lkpd.get('judul', 'Tanpa Judul')}**")
+            st.success(f"LKPD: {lkpd.get('judul', 'Tanpa Judul')}")
             card("🎯 Tujuan Pembelajaran", "<br>".join(lkpd.get("tujuan_pembelajaran", [])), "#eef2ff")
             card("📚 Materi Singkat", lkpd.get("materi_singkat", "(Belum ada materi)"), "#f0fdf4")
 
             jawaban_list = []
+
+            # 🧩 Tampilkan Tahapan Pembelajaran (struktur baru)
             tahapan = lkpd.get("tahapan_pembelajaran", [])
             if tahapan:
                 for i, tahap in enumerate(tahapan, 1):
@@ -210,11 +252,25 @@ else:
                         st.markdown(f"**Tujuan:** {tahap.get('deskripsi_tujuan', '')}")
                         st.markdown(f"**Bagian Inti:** {tahap.get('bagian_inti', '')}")
                         st.markdown(f"**Petunjuk:** {tahap.get('petunjuk', '')}")
-                        st.divider()
 
+                        # Jika ada pertanyaan pemantik
                         for j, q in enumerate(tahap.get("pertanyaan_pemantik", []), 1):
-                            ans = st.text_area(f"**{i}.{j}** {q.get('pertanyaan')}",
-                                key=f"{lkpd_id}_{sanitized_nama}_{i}_q{j}", height=120)
+                            ans = st.text_area(f"{i}.{j} {q.get('pertanyaan')}", key=f"{lkpd_id}_{nama}_{i}_{j}", height=120)
+                            jawaban_list.append({"pertanyaan": q.get("pertanyaan"), "jawaban": ans})
+
+                        # Jika ada skenario (khusus tahap Mengaplikasikan)
+                        for j, s in enumerate(tahap.get("skenario", []), 1):
+                            st.markdown(f"**Skenario {j}: {s.get('judul','')}**")
+                            st.write(s.get('deskripsi', ""))
+                            ans = st.text_area(f"Analisis Skenario {j}: {s.get('pertanyaan')}", key=f"{lkpd_id}_{nama}_{i}_s{j}", height=120)
+                            jawaban_list.append({"pertanyaan": s.get("pertanyaan"), "jawaban": ans})
+            else:
+                # fallback untuk LKPD versi lama
+                for i, kegiatan in enumerate(lkpd.get("kegiatan", []), 1):
+                    with st.expander(f"Kegiatan {i}: {kegiatan.get('nama','')}"):
+                        st.write(kegiatan.get("petunjuk", ""))
+                        for j, q in enumerate(kegiatan.get("pertanyaan_pemantik", []), 1):
+                            ans = st.text_area(f"{i}.{j} {q.get('pertanyaan')}", key=f"{lkpd_id}_{nama}_{i}_{j}", height=120)
                             jawaban_list.append({"pertanyaan": q.get("pertanyaan"), "jawaban": ans})
 
             if st.button("📤 Submit Jawaban"):
@@ -226,4 +282,4 @@ else:
                 save_json(ANSWERS_DIR, lkpd_id, existing)
                 st.success("✅ Jawaban terkirim! Guru akan menilai dari sistem.")
     else:
-        st.info("Masukkan **ID LKPD** dan **Nama** untuk mulai mengerjakan.")
+        st.info("Masukkan ID LKPD dan nama untuk mulai mengerjakan.")

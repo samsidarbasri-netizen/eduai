@@ -14,7 +14,7 @@ from gemini_config import (
     LKPD_DIR,
     ANSWERS_DIR
 )
-import datetime # Import datetime untuk timestamp
+import datetime 
 
 # ------------------ Setup & Helpers ------------------
 
@@ -58,7 +58,7 @@ ok, msg, debug = init_model(api_key)
 # Cek inisialisasi model
 if not ok:
     st.error(msg)
-    st.stop()
+    # st.stop() # Jangan stop, biarkan user mencoba memasukkan key
 else:
     st.success(msg)
 
@@ -86,7 +86,7 @@ if role == "👨‍🏫 Guru":
     with tab_create:
         tema = st.text_input("Tema / Topik Pembelajaran")
         
-        # DEFINISI SKALA KESIAPAN (BARU)
+        # DEFINISI SKALA KESIAPAN (UNTUK MENYESUAIKAN KEDALAMAN MATERI)
         readiness_options = {
             "1 - Mulai dari Dasar": "1 (Mulai dari Dasar): Sedikit atau tidak ada prasyarat. Materi harus sangat rinci.",
             "2 - Membutuhkan Bantuan": "2 (Membutuhkan Bantuan): Prasyarat terbatas. Materi harus mengulang konsep dasar.",
@@ -107,9 +107,11 @@ if role == "👨‍🏫 Guru":
         if st.button("Generate LKPD (AI)"):
             if not tema.strip():
                 st.warning("Masukkan **tema** terlebih dahulu.")
+            elif not ok:
+                 st.error("Model AI belum terinisialisasi. Cek API Key Anda.")
             else:
                 with st.spinner("Menghasilkan LKPD (format pembelajaran mendalam)..."):
-                    # Meneruskan instruksi kesiapan ke fungsi generate_lkpd
+                    # PENTING: Hanya meneruskan tema dan instruksi kesiapan (2 argumen)
                     data, dbg = generate_lkpd(tema, readiness_instruction) 
                     
                     if data:
@@ -123,7 +125,7 @@ if role == "👨‍🏫 Guru":
                             file_name=f"LKPD_{lkpd_id}.json"
                         )
                     else:
-                        st.error("Gagal membuat LKPD.")
+                        st.error("Gagal membuat LKPD. Cek detail error di bawah.")
                         st.json(dbg)
 
     # --- TAB PANTAU JAWABAN (Monitor) ---
@@ -159,6 +161,10 @@ if role == "👨‍🏫 Guru":
                         total_score_siswa = 0
                         count = 0
 
+                        # Hitung Total Max Score LKPD
+                        if not total_max_score_lkpd and record.get("jawaban"):
+                            total_max_score_lkpd = sum([q.get('bobot', 10) for q in record.get("jawaban", [])])
+
                         # Iterasi melalui setiap pertanyaan dan jawaban siswa
                         for idx, q in enumerate(record.get("jawaban", []), 1):
                             pertanyaan = q.get('pertanyaan')
@@ -172,25 +178,31 @@ if role == "👨‍🏫 Guru":
                             
                             # === MODE PENILAIAN AI ===
                             if mode_penilaian == "💡 Penilaian Otomatis (AI)":
-                                # Meneruskan objek pertanyaan/jawaban (q)
-                                ai_eval = analyze_answer_with_ai(q)
-                                
-                                score_persentase = ai_eval.get("score", 0)
-                                fb = ai_eval.get("feedback", "")
-                                
-                                # Hitung Skor Absolut: (Skor Persentase / 100) * Bobot Maks
-                                score_absolut = round((score_persentase / 100) * bobot, 2)
-                                
-                                st.info(f"💬 Feedback AI: {fb} (Persentase: {score_persentase}%)")
-                                st.success(f"Skor Absolut Siswa: **{score_absolut} / {bobot} Poin**")
+                                if not ok:
+                                    st.error("Tidak bisa menggunakan AI. Model belum siap.")
+                                    score_absolut = 0
+                                else:
+                                    # Meneruskan objek pertanyaan/jawaban (q)
+                                    ai_eval = analyze_answer_with_ai(q)
+                                    
+                                    score_persentase = ai_eval.get("score", 0)
+                                    fb = ai_eval.get("feedback", "")
+                                    
+                                    # Hitung Skor Absolut: (Skor Persentase / 100) * Bobot Maks
+                                    score_absolut = round((score_persentase / 100) * bobot, 2)
+                                    
+                                    st.info(f"💬 Feedback AI: {fb} (Persentase: {score_persentase}%)")
+                                    st.success(f"Skor Absolut Siswa: **{score_absolut} / {bobot} Poin**")
                                 
                                 total_score_siswa += score_absolut
                                 
                             # === MODE PENILAIAN MANUAL ===
                             else:
+                                # Menggunakan key yang unik berdasarkan ID LKPD, nama siswa, dan index
                                 score_absolut = st.number_input(
                                     f"Skor Absolut ({bobot} Poin Maks)",
-                                    min_value=0, max_value=bobot, value=0,
+                                    min_value=0, max_value=bobot, 
+                                    value=min(bobot, int(record.get(f"score_manual_{idx}", 0))), # Ambil nilai tersimpan
                                     key=f"{lkpd_id}_{nama}_{idx}_score"
                                 )
                                 fb = st.text_area(
@@ -199,13 +211,14 @@ if role == "👨‍🏫 Guru":
                                     height=60
                                 )
                                 total_score_siswa += score_absolut
+                                # Simpan manual score dalam record siswa
+                                record[f"score_manual_{idx}"] = score_absolut
+                                record[f"feedback_manual_{idx}"] = fb
+
 
                             count += 1
                             st.markdown("---") # Pemisah antar pertanyaan
 
-                        # Hitung Total Max Score LKPD (hanya sekali per LKPD)
-                        if not total_max_score_lkpd and record.get("jawaban"):
-                            total_max_score_lkpd = sum([q.get('bobot', 10) for q in record.get("jawaban", [])])
                         
                         # Hitung Nilai Akhir Siswa (Skala 100)
                         nilai_skala_100 = round((total_score_siswa / total_max_score_lkpd) * 100, 2) if total_max_score_lkpd else 0
@@ -236,7 +249,7 @@ else:
     lkpd_id = st.text_input("Masukkan ID LKPD yang diberikan guru")
     nama = st.text_input("Nama lengkap")
 
-    if lkpd_id and nama:
+    if lkpd_id and nama and ok: # Memastikan model inisialisasi berhasil
         # Sanitasi nama untuk penggunaan dalam key
         sanitized_nama = sanitize_id(nama)
 
@@ -300,29 +313,8 @@ else:
                             })
 
             else:
-                # Fallback untuk LKPD versi lama (jika ada struktur 'kegiatan')
-                st.warning("Struktur LKPD lama terdeteksi. Bobot dan Level Kognitif default (10 poin/Lvl 1) akan digunakan.")
-                for i, kegiatan in enumerate(lkpd.get("kegiatan", []), 1):
-                    with st.expander(f"Kegiatan {i}: {kegiatan.get('nama','')} (Format Lama)"):
-                        st.write(kegiatan.get("petunjuk", ""))
-                        st.divider()
-                        for j, q in enumerate(kegiatan.get("pertanyaan_pemantik", []), 1):
-                            # Default bobot/level untuk LKPD lama
-                            bobot_default = 10 
-                            level_default = 1
-                            
-                            ans = st.text_area(
-                                f"**{i}.{j}** (Lvl {level_default}, Bobot {bobot_default}) {q.get('pertanyaan')}",
-                                key=f"{lkpd_id}_{sanitized_nama}_old_{i}_{j}",
-                                height=120
-                            )
-                            jawaban_list.append({
-                                "pertanyaan": q.get("pertanyaan"), 
-                                "jawaban": ans,
-                                "bobot": bobot_default,
-                                "level_kognitif": level_default
-                            })
-
+                st.warning("Struktur LKPD tidak lengkap.")
+                
             if st.button("📤 **Submit Jawaban**"):
                 # Simpan jawaban siswa
                 existing = load_json(ANSWERS_DIR, lkpd_id) or {}
@@ -333,5 +325,7 @@ else:
                 }
                 save_json(ANSWERS_DIR, lkpd_id, existing)
                 st.success("✅ **Jawaban terkirim!** Guru akan menilai dari sistem.")
+    elif not ok:
+        st.warning("Masukkan API Key terlebih dahulu di Mode Guru agar aplikasi dapat berjalan.")
     else:
         st.info("Masukkan **ID LKPD** dan **Nama** untuk mulai mengerjakan.")

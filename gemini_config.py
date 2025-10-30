@@ -1,11 +1,10 @@
 """
-gemini_config.py — FINAL COMPLETE FIXED VERSION (with Difficulty Level)
+gemini_config.py — FINAL COMPLETE FIXED VERSION
 -----------------------------------------------------
 ✅ Format Pembelajaran Mendalam (Memahami – Mengaplikasikan – Merefleksi)
 ✅ LKPD hanya berupa teks konseptual — tanpa grafik, tabel, diagram, atau gambar
 ✅ Skor otomatis 0 + feedback “Siswa tidak menjawab.”
 ✅ Kompatibel penuh dengan app.py (parameter question, student_answer, lkpd_context)
-✅ Tambahan: tingkat kesulitan (mudah / sedang / sulit)
 """
 
 import os
@@ -84,66 +83,36 @@ def list_available_models() -> Dict[str, Any]:
 
 
 # ------------------ LKPD Generator ------------------
-def generate_lkpd(theme: str, difficulty: str = "Sedang", max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+def generate_lkpd(theme: str, max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     """
     Menghasilkan LKPD format Pembelajaran Mendalam (Teoritis Tanpa Perhitungan)
     Struktur 3 tahap: Memahami – Mengaplikasikan – Merefleksi
-    Tambahan: parameter tingkat kesulitan (mudah/sedang/sulit)
+    Tidak boleh mengandung gambar, grafik, tabel, diagram, atau visual apapun.
     """
-    debug = {"chosen_model": _CHOSEN_MODEL_NAME, "difficulty": difficulty}
+    debug = {"chosen_model": _CHOSEN_MODEL_NAME}
     model = get_model()
     if not model:
         debug["error"] = "Model not initialized"
         return None, debug
 
-    # Penjelasan kesulitan untuk konteks prompt
-    difficulty_expl = {
-        "Mudah": "Gunakan pertanyaan faktual dan pemahaman konsep dasar. Fokus membantu siswa memahami ide utama dengan contoh sederhana.",
-        "Sedang": "Gunakan pertanyaan aplikatif dan analitis ringan. Fokus pada penerapan konsep dan penghubungan teori dengan realitas sosial.",
-        "Sulit": "Gunakan pertanyaan analitis mendalam dan reflektif. Fokus pada evaluasi kritis dan pemikiran tingkat tinggi (HOTS)."
-    }
-
-    level_desc = difficulty_expl.get(difficulty.capitalize(), difficulty_expl["Sedang"])
-
     prompt = f"""
-    Buatkan Lembar Kerja Peserta Didik (LKPD) untuk materi: "{theme}".
+    Buatkan saya Lembar Kerja Peserta Didik (LKPD) untuk materi: {theme}.
 
-    LKPD harus menggunakan format Pembelajaran Mendalam dengan 3 tahap utama:
-    1. Memahami
-    2. Mengaplikasikan
-    3. Merefleksi
-
-    LKPD hanya berupa teks konseptual — tanpa grafik, tabel, diagram, atau gambar.
-
-    Tingkat kesulitan yang digunakan: {difficulty.upper()}
-    Penjelasan tingkat kesulitan: {level_desc}
-
-    Format JSON yang harus dihasilkan:
+    LKPD harus menggunakan format Pembelajaran Mendalam (Teoritis Tanpa Perhitungan),
+    dengan struktur JSON seperti berikut:
     {{
-      "judul": "LKPD Pembelajaran Mendalam: {theme}",
+      "judul": "LKPD Pembelajaran Mendalam: Memahami {theme}",
       "tujuan_pembelajaran": [...],
       "materi_singkat": "...",
-      "tahapan_pembelajaran": [
-        {{
-          "tahap": "Memahami",
-          "pertanyaan": "..."
-        }},
-        {{
-          "tahap": "Mengaplikasikan",
-          "pertanyaan": "..."
-        }},
-        {{
-          "tahap": "Merefleksi",
-          "pertanyaan": "..."
-        }}
-      ],
-      "jawaban_benar": ["Contoh jawaban konseptual"],
+      "tahapan_pembelajaran": [...],
+      "jawaban_benar": ["Contoh jawaban umum yang menunjukkan pemahaman konseptual."],
       "format_akhir": "Jawaban Siswa (Nama Siswa: …)"
     }}
 
-    ⚠️ Catatan penting:
-    - Gunakan gaya bahasa naratif, reflektif, dan komunikatif.
-    - Pastikan JSON valid tanpa tambahan teks di luar format.
+    ⚠️ Catatan:
+    - Gunakan teks naratif dan reflektif.
+    - Tidak boleh ada grafik, tabel, diagram, gambar, atau visual.
+    - Hasilkan hanya JSON valid sesuai format di atas.
     """
 
     attempt = 0

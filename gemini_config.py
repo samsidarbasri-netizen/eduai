@@ -1,262 +1,245 @@
-import streamlit as st
-import uuid
-import json
+"""
+gemini_config.py — FINAL COMPLETE FIXED VERSION (with Difficulty Level)
+-----------------------------------------------------
+✅ Format Pembelajaran Mendalam (Memahami – Mengaplikasikan – Merefleksi)
+✅ LKPD hanya berupa teks konseptual — tanpa grafik, tabel, diagram, atau gambar
+✅ Skor otomatis 0 + feedback “Siswa tidak menjawab.”
+✅ Kompatibel penuh dengan app.py (parameter question, student_answer, lkpd_context)
+✅ Tambahan: tingkat kesulitan (mudah / sedang / sulit)
+"""
+
 import os
+import json
 import re
-import pandas as pd
-from gemini_config import (
-    init_model,
-    list_available_models,
-    generate_lkpd,
-    analyze_answer_with_ai,
-    save_json,
-    load_json,
-    LKPD_DIR,
-    ANSWERS_DIR
-)
+import time
+from typing import Optional, Dict, Any, Tuple
+import google.generativeai as genai
 
-# =========================================================
-# KONFIGURASI HALAMAN
-# =========================================================
-st.set_page_config(
-    page_title="EduAI LKPD Modern",
-    layout="wide",
-    page_icon="🎓"
-)
+# ------------------ Folder ------------------
+LKPD_DIR = "lkpd_outputs"
+ANSWERS_DIR = "answers"
 
-# =========================================================
-# UTILITAS
-# =========================================================
-def sanitize_id(s: str) -> str:
-    """Hilangkan karakter non-alfanumerik dan batasi panjang ID"""
-    return re.sub(r"[^\w-]", "_", s.strip())[:64]
+_MODEL = None
+_CHOSEN_MODEL_NAME = None
 
-os.makedirs(LKPD_DIR, exist_ok=True)
-os.makedirs(ANSWERS_DIR, exist_ok=True)
 
-def card(title: str, content: str, color: str = "#f9fafb"):
-    """Komponen visual card sederhana"""
-    st.markdown(
-        f"""
-        <div style='background:{color};padding:12px 18px;border-radius:10px;
-        box-shadow:0 1px 3px rgba(0,0,0,0.1);margin-bottom:10px;'>
-            <div style='font-weight:600;font-size:17px;margin-bottom:6px;'>{title}</div>
-            <div style='font-size:14px;line-height:1.5;'>{content}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+# ------------------ Utility ------------------
+def _extract_json_from_text(text: str) -> Optional[str]:
+    """Ambil blok JSON dari teks mentah hasil model Gemini."""
+    if not text:
+        return None
+    cleaned = text.replace("```json", "").replace("```", "").strip()
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    return match.group(0) if match else cleaned
 
-# =========================================================
-# INISIALISASI MODEL GEMINI
-# =========================================================
-st.title("EduAI — LKPD Pembelajaran Mendalam")
-st.caption("AI membantu membuat LKPD konseptual dan menganalisis pemahaman siswa secara semi-otomatis.")
 
-# ✅ Ambil API Key dari Streamlit Secrets
-if "GEMINI_API_KEY" not in st.secrets or not st.secrets["GEMINI_API_KEY"]:
-    st.error("❌ API Key Gemini tidak ditemukan di Streamlit Secrets.\n\n"
-             "Tambahkan ke file `.streamlit/secrets.toml` dengan format:\n\n"
-             "```\nGEMINI_API_KEY = \"YOUR_API_KEY_HERE\"\n```")
-    st.stop()
+# ------------------ Model Init ------------------
+def init_model(api_key: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
+    """Inisialisasi model Gemini dengan API key."""
+    global _MODEL, _CHOSEN_MODEL_NAME
+    debug = {}
+    try:
+        if not api_key or not isinstance(api_key, str) or api_key.strip() == "":
+            return False, "API key kosong atau tidak valid.", debug
 
-api_key = st.secrets["GEMINI_API_KEY"]
+        genai.configure(api_key=api_key)
+        candidates = [
+            "models/gemini-2.5-flash",
+            "gemini-2.5-flash",
+            "models/gemini-1.5-flash",
+            "gemini-1.5-flash",
+        ]
+        chosen = None
+        try:
+            models = genai.list_models()
+            names = [m.name for m in models]
+            for c in candidates:
+                if c in names:
+                    chosen = c
+                    break
+        except Exception:
+            chosen = "gemini-1.5-flash"
 
-ok, msg, debug = init_model(api_key)
-if not ok:
-    st.error(msg)
-    st.stop()
-else:
-    st.success(msg)
-    st.caption(f"Model aktif: **{debug.get('chosen_model', 'tidak terdeteksi')}**")
+        _MODEL = genai.GenerativeModel(chosen)
+        _CHOSEN_MODEL_NAME = chosen
+        debug["chosen_model"] = chosen
+        return True, f"Model initialized: {chosen}", debug
 
-# =========================================================
-# SIDEBAR
-# =========================================================
-st.sidebar.header("Navigasi")
-role = st.sidebar.radio("Pilih Peran", ["👨‍🏫 Guru", "👩‍🎓 Siswa"])
-st.sidebar.divider()
+    except Exception as e:
+        return False, f"Init Error: {type(e).__name__}: {e}", debug
 
-if st.sidebar.button("🔎 Tes koneksi (list models)"):
-    info = list_available_models()
-    if info.get("ok"):
-        st.sidebar.success(f"{info['count']} model ditemukan.")
-    else:
-        st.sidebar.error(info.get("error", "Gagal memeriksa model."))
 
-# =========================================================
-# MODE GURU
-# =========================================================
-if role == "👨‍🏫 Guru":
-    st.header("👨‍🏫 Mode Guru — Buat & Pantau LKPD")
-    tab_create, tab_monitor = st.tabs(["✏️ Buat LKPD", "📊 Pantau Jawaban"])
+def get_model():
+    """Ambil instance model aktif."""
+    return _MODEL
 
-    # ---------------- TAB BUAT LKPD ----------------
-    with tab_create:
-        tema = st.text_input("Tema / Topik Pembelajaran")
-        if st.button("Generate LKPD (AI)"):
-            if not tema.strip():
-                st.warning("Masukkan **tema** terlebih dahulu.")
-            else:
-                with st.spinner("Menghasilkan LKPD (format pembelajaran mendalam)..."):
-                    data, dbg = generate_lkpd(tema)
-                    if data:
-                        lkpd_id = str(uuid.uuid4())[:8]
-                        save_json(LKPD_DIR, lkpd_id, data)
-                        st.success(f"✅ **LKPD berhasil dibuat** (ID: **{lkpd_id}**)")
-                        st.json(data)
-                        st.download_button(
-                            "📥 Unduh LKPD (JSON)",
-                            json.dumps(data, ensure_ascii=False, indent=2),
-                            file_name=f"LKPD_{lkpd_id}.json"
-                        )
-                    else:
-                        st.error("Gagal membuat LKPD.")
-                        st.json(dbg)
 
-    # ---------------- TAB PANTAU JAWABAN ----------------
-    with tab_monitor:
-        st.subheader("Pantau Jawaban Siswa")
-        lkpd_id = st.text_input("Masukkan ID LKPD yang ingin dipantau")
-        if lkpd_id:
-            lkpd = load_json(LKPD_DIR, lkpd_id)
-            if not lkpd:
-                st.error("LKPD tidak ditemukan.")
-            else:
-                st.success(f"LKPD: **{lkpd.get('judul', 'Tanpa Judul')}**")
-                answers = load_json(ANSWERS_DIR, lkpd_id) or {}
-                if not answers:
-                    st.info("Belum ada jawaban siswa untuk LKPD ini.")
-                else:
-                    mode_penilaian = st.radio(
-                        "Pilih Metode Penilaian",
-                        ["💡 Penilaian Otomatis (AI)", "✍️ Penilaian Manual (Guru)"],
-                        horizontal=True
-                    )
-                    st.divider()
-                    rekap = []
+def list_available_models() -> Dict[str, Any]:
+    """Melihat daftar model Gemini yang tersedia."""
+    try:
+        models = genai.list_models()
+        return {"ok": True, "count": len(models), "names": [m.name for m in models]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
-                    for nama, record in answers.items():
-                        st.markdown(f"### 🧑‍🎓 Siswa: **{nama}**")
-                        total_score = 0
-                        count = 0
 
-                        for idx, q in enumerate(record.get("jawaban", []), 1):
-                            st.markdown(f"**{idx}. {q.get('pertanyaan')}**")
-                            st.write(f"**Jawaban Siswa:** {q.get('jawaban') or '_(tidak ada jawaban)_'}")
+# ------------------ LKPD Generator ------------------
+def generate_lkpd(theme: str, difficulty: str = "Sedang", max_retry: int = 1) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Menghasilkan LKPD format Pembelajaran Mendalam (Teoritis Tanpa Perhitungan)
+    Struktur 3 tahap: Memahami – Mengaplikasikan – Merefleksi
+    Tambahan: parameter tingkat kesulitan (mudah/sedang/sulit)
+    """
+    debug = {"chosen_model": _CHOSEN_MODEL_NAME, "difficulty": difficulty}
+    model = get_model()
+    if not model:
+        debug["error"] = "Model not initialized"
+        return None, debug
 
-                            score, fb = 0, ""
-                            if mode_penilaian == "💡 Penilaian Otomatis (AI)":
-                                ai_eval = analyze_answer_with_ai(
-                                    question=q.get("pertanyaan"),
-                                    student_answer=q.get("jawaban"),
-                                    lkpd_context=lkpd
-                                )
-                                score = ai_eval.get("score", 0)
-                                fb = ai_eval.get("feedback", "")
-                                st.info(f"💬 Feedback AI: {fb} (Skor: **{score}**)")
-                            else:
-                                score = st.number_input(
-                                    f"Skor untuk pertanyaan {idx} (0-100)",
-                                    min_value=0, max_value=100, value=0,
-                                    key=f"{lkpd_id}_{nama}_{idx}_score"
-                                )
-                                fb = st.text_area(
-                                    f"Catatan Guru (opsional) untuk pertanyaan {idx}",
-                                    key=f"{lkpd_id}_{nama}_{idx}_fb", height=60
-                                )
+    # Penjelasan kesulitan untuk konteks prompt
+    difficulty_expl = {
+        "Mudah": "Gunakan pertanyaan faktual dan pemahaman konsep dasar. Fokus membantu siswa memahami ide utama dengan contoh sederhana.",
+        "Sedang": "Gunakan pertanyaan aplikatif dan analitis ringan. Fokus pada penerapan konsep dan penghubungan teori dengan realitas sosial.",
+        "Sulit": "Gunakan pertanyaan analitis mendalam dan reflektif. Fokus pada evaluasi kritis dan pemikiran tingkat tinggi (HOTS)."
+    }
 
-                            total_score += score
-                            count += 1
-                            st.markdown("---")
+    level_desc = difficulty_expl.get(difficulty.capitalize(), difficulty_expl["Sedang"])
 
-                        avg = round(total_score / count, 2) if count else 0
-                        rekap.append({
-                            "Nama": nama,
-                            "Total Pertanyaan": count,
-                            "Total Skor": total_score,
-                            "Rata-rata Skor": avg,
-                            "Analisis AI": (
-                                "Pemahaman tinggi" if avg > 80
-                                else "Cukup baik" if avg >= 60
-                                else "Perlu bimbingan"
-                            )
-                        })
-                        st.divider()
+    prompt = f"""
+    Buatkan Lembar Kerja Peserta Didik (LKPD) untuk materi: "{theme}".
 
-                    st.markdown("## 📊 Rekapan Nilai Siswa")
-                    df = pd.DataFrame(rekap)
-                    st.dataframe(df, use_container_width=True)
+    LKPD harus menggunakan format Pembelajaran Mendalam dengan 3 tahap utama:
+    1. Memahami
+    2. Mengaplikasikan
+    3. Merefleksi
 
-# =========================================================
-# MODE SISWA
-# =========================================================
-else:
-    st.header("👩‍🎓 Mode Siswa — Kerjakan LKPD Pembelajaran Mendalam")
-    lkpd_id = st.text_input("Masukkan ID LKPD yang diberikan guru")
-    nama = st.text_input("Nama lengkap")
+    LKPD hanya berupa teks konseptual — tanpa grafik, tabel, diagram, atau gambar.
 
-    if lkpd_id and nama:
-        sanitized_nama = sanitize_id(nama)
-        lkpd = load_json(LKPD_DIR, lkpd_id)
+    Tingkat kesulitan yang digunakan: {difficulty.upper()}
+    Penjelasan tingkat kesulitan: {level_desc}
 
-        if not lkpd:
-            st.error("LKPD tidak ditemukan.")
-        else:
-            st.success(f"LKPD Ditemukan: **{lkpd.get('judul', 'Tanpa Judul')}**")
+    Format JSON yang harus dihasilkan:
+    {{
+      "judul": "LKPD Pembelajaran Mendalam: {theme}",
+      "tujuan_pembelajaran": [...],
+      "materi_singkat": "...",
+      "tahapan_pembelajaran": [
+        {{
+          "tahap": "Memahami",
+          "pertanyaan": "..."
+        }},
+        {{
+          "tahap": "Mengaplikasikan",
+          "pertanyaan": "..."
+        }},
+        {{
+          "tahap": "Merefleksi",
+          "pertanyaan": "..."
+        }}
+      ],
+      "jawaban_benar": ["Contoh jawaban konseptual"],
+      "format_akhir": "Jawaban Siswa (Nama Siswa: …)"
+    }}
 
-            card("🎯 Tujuan Pembelajaran", "<br>".join(lkpd.get("tujuan_pembelajaran", [])), "#eef2ff")
-            card("📚 Materi Singkat", lkpd.get("materi_singkat", "(Belum ada materi)"), "#f0fdf4")
+    ⚠️ Catatan penting:
+    - Gunakan gaya bahasa naratif, reflektif, dan komunikatif.
+    - Pastikan JSON valid tanpa tambahan teks di luar format.
+    """
 
-            jawaban_list = []
-            tahapan = lkpd.get("tahapan_pembelajaran", [])
+    attempt = 0
+    while attempt <= max_retry:
+        try:
+            response = model.generate_content(prompt)
+            raw = getattr(response, "text", str(response))
+            debug["raw_response"] = raw[:4000]
+            json_block = _extract_json_from_text(raw)
+            if not json_block:
+                raise ValueError("Tidak ditemukan blok JSON")
+            data = json.loads(json_block)
+            return data, debug
+        except Exception as e:
+            debug.setdefault("attempts", []).append(f"{type(e).__name__}: {e}")
+            attempt += 1
+            time.sleep(0.5)
+            if attempt > max_retry:
+                return None, debug
 
-            if tahapan:
-                for i, tahap in enumerate(tahapan, 1):
-                    with st.expander(f"🧭 **Tahap {i}: {tahap.get('tahap', '')}**"):
-                        st.markdown(f"**Tujuan:** {tahap.get('deskripsi_tujuan', '')}")
-                        st.markdown(f"**Bagian Inti:** {tahap.get('bagian_inti', '')}")
-                        st.markdown(f"**Petunjuk:** {tahap.get('petunjuk', '')}")
-                        st.divider()
 
-                        for j, q in enumerate(tahap.get("pertanyaan_pemantik", []), 1):
-                            ans = st.text_area(
-                                f"**{i}.{j}** {q.get('pertanyaan')}",
-                                key=f"{lkpd_id}_{sanitized_nama}_{i}_q{j}",
-                                height=120
-                            )
-                            jawaban_list.append({"pertanyaan": q.get("pertanyaan"), "jawaban": ans})
+# ------------------ Penilaian Jawaban Siswa ------------------
+def analyze_answer_with_ai(question=None, student_answer=None, lkpd_context=None, *args, **kwargs) -> Dict[str, Any]:
+    """
+    Fungsi penilaian otomatis AI yang kompatibel dengan app.py
+    Mendukung parameter: question, student_answer, lkpd_context
+    """
+    model = get_model()
+    if not model:
+        return {"score": 0, "feedback": "Model belum siap."}
 
-                        for j, s in enumerate(tahap.get("skenario", []), 1):
-                            st.markdown(f"#### **Skenario {j}: {s.get('judul','')}**")
-                            st.write(s.get("deskripsi", ""))
-                            ans = st.text_area(
-                                f"**Analisis Skenario {j}:** {s.get('pertanyaan')}",
-                                key=f"{lkpd_id}_{sanitized_nama}_{i}_s{j}",
-                                height=120
-                            )
-                            jawaban_list.append({"pertanyaan": s.get("pertanyaan"), "jawaban": ans})
-            else:
-                st.warning("Struktur LKPD lama terdeteksi (menggunakan 'kegiatan').")
-                for i, kegiatan in enumerate(lkpd.get("kegiatan", []), 1):
-                    with st.expander(f"Kegiatan {i}: {kegiatan.get('nama','')} (Format Lama)"):
-                        st.write(kegiatan.get("petunjuk", ""))
-                        st.divider()
-                        for j, q in enumerate(kegiatan.get("pertanyaan_pemantik", []), 1):
-                            ans = st.text_area(
-                                f"**{i}.{j}** {q.get('pertanyaan')}",
-                                key=f"{lkpd_id}_{sanitized_nama}_old_{i}_{j}",
-                                height=120
-                            )
-                            jawaban_list.append({"pertanyaan": q.get("pertanyaan"), "jawaban": ans})
+    # Backward compatibility
+    if question is None and len(args) > 0:
+        question = args[0]
+    if student_answer is None and len(args) > 1:
+        student_answer = args[1]
+    if lkpd_context is None and len(args) > 2:
+        lkpd_context = args[2]
 
-            if st.button("📤 **Submit Jawaban**"):
-                existing = load_json(ANSWERS_DIR, lkpd_id) or {}
-                existing[nama] = {
-                    "jawaban": jawaban_list,
-                    "submitted_at": str(__import__('datetime').datetime.now())
-                }
-                save_json(ANSWERS_DIR, lkpd_id, existing)
-                st.success("✅ **Jawaban terkirim!** Guru akan menilai dari sistem.")
-    else:
-        st.info("Masukkan **ID LKPD** dan **Nama** untuk mulai mengerjakan.")
+    if not student_answer or not student_answer.strip():
+        return {"score": 0, "feedback": "Siswa tidak menjawab."}
+
+    prompt = f"""
+    Anda adalah sistem penilai otomatis berbasis AI.
+
+    Konteks LKPD:
+    {lkpd_context}
+
+    Pertanyaan:
+    {question}
+
+    Jawaban siswa:
+    {student_answer}
+
+    Instruksi:
+    1️⃣ Berikan skor objektif (0–100) berdasarkan ketepatan konsep dan kedalaman pemahaman.
+    2️⃣ Berikan umpan balik singkat dan spesifik.
+    
+    Format output HARUS:
+    SKOR: [angka]
+    FEEDBACK: [teks]
+    """
+
+    try:
+        resp = model.generate_content(prompt)
+        text = getattr(resp, "text", str(resp)) or ""
+        score = 0
+        feedback = "Siswa tidak menjawab."
+
+        if "SKOR:" in text:
+            try:
+                score_line = text.split("SKOR:")[1].split("\n")[0].strip()
+                score = int(''.join(c for c in score_line if c.isdigit()) or "0")
+            except:
+                score = 0
+
+        if "FEEDBACK:" in text:
+            feedback = text.split("FEEDBACK:")[1].strip()
+
+        return {"score": score, "feedback": feedback}
+    except Exception as e:
+        return {"score": 0, "feedback": f"Analisis gagal: {e}"}
+
+
+# ------------------ File Helpers ------------------
+def save_json(folder: str, file_id: str, data: dict):
+    """Simpan file JSON secara aman."""
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, f"{file_id}.json"), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def load_json(folder: str, file_id: str):
+    """Membaca file JSON bila tersedia."""
+    path = os.path.join(folder, f"{file_id}.json")
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
